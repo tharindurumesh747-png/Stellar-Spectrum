@@ -1,0 +1,6 @@
+{
+  "name": "Stellar Spectrum",
+  "description": "A premium synthwave neon color-matching space shooter arcade experience.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
