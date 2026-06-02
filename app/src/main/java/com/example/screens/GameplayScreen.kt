@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -101,12 +102,14 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 )
             }
             .pointerInput(Unit) {
-                this.detectTapGestures { tapLoc ->
-                    // Firing Zone lies vertically above UI dashboard boundary
-                    if (tapLoc.y < 1350f) {
-                        viewModel.fireBulletAt(tapLoc.x, tapLoc.y)
+                detectTapGestures(
+                    onTap = { tapLoc ->
+                        // Firing Zone lies vertically above UI dashboard boundary
+                        if (tapLoc.y < 1350f) {
+                            viewModel.fireBulletAt(tapLoc.x, tapLoc.y)
+                        }
                     }
-                }
+                )
             }
     ) {
 
@@ -436,7 +439,7 @@ fun GameplayScreen(viewModel: GameViewModel) {
                     color = Color(0xFFFF2E63),
                     fontSize = 11.sp,
                     fontWeight = FontWeight.ExtraBold,
-                    letterSpacing = 1..sp
+                    letterSpacing = 1.sp
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Box(
@@ -641,7 +644,7 @@ fun GameplayScreen(viewModel: GameViewModel) {
                     Text(
                         text = "🛰️ PORTAL DEVIATION CLEARED!",
                         fontSize = 20.sp,
-                        fontWeight = FontWeight.Heavy,
+                        fontWeight = FontWeight.ExtraBold,
                         color = Color(0xFFFBBF24),
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()

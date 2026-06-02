@@ -194,7 +194,7 @@ fun SynthwaveGridBackground(
                 color = gridColor,
                 start = center,
                 end = Offset(endX, h),
-                strokeWidth = 1.51dp.toPx()
+                strokeWidth = 1.51.dp.toPx()
             )
         }
 

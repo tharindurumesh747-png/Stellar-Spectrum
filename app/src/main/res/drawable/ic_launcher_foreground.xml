@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    
+    <!-- Thruster fire glow -->
+    <path
+        android:fillColor="#FFBD00FF"
+        android:pathData="M 54,65 L 48,74 L 54,86 L 60,74 Z" />
+    <path
+        android:fillColor="#FFFF4E98"
+        android:pathData="M 54,65 L 50,71 L 54,79 L 58,71 Z" />
+
+    <!-- Spaceship Wings / Outer Body -->
+    <path
+        android:fillColor="#FF00F0FF"
+        android:pathData="M 54,24 L 76,64 L 66,66 L 54,58 L 42,66 L 32,64 Z" />
+
+    <!-- Spaceship Cockpit & Interior details (high contrast overlay) -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M 54,28 L 62,50 L 54,55 L 46,50 Z" />
+    
+    <!-- Cross laser-sight accents -->
+    <path
+        android:strokeColor="#FFBD00FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M 54,16 L 54,10" />
+    <path
+        android:strokeColor="#FF00F0FF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M 24,54 L 16,54" />
+    <path
+        android:strokeColor="#FF00F0FF"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M 84,54 L 92,54" />
+</vector>

@@ -200,7 +200,7 @@ fun ShopScreen(viewModel: GameViewModel) {
                                 Text(
                                     text = item.visualHint,
                                     fontSize = 28.sp,
-                                    modifier = Modifier.padding(trailing = 12.dp)
+                                    modifier = Modifier.padding(end = 12.dp)
                                 )
                                 Column {
                                     Text(
@@ -248,7 +248,7 @@ fun ShopScreen(viewModel: GameViewModel) {
     }
 }
 
-private fun spawnCustomSparkles(context: Context) {
+private fun spawnCustomSparkles(context: android.content.Context) {
     // Triggers feedback vibration haptically
     triggerVibration(context, 40)
 }

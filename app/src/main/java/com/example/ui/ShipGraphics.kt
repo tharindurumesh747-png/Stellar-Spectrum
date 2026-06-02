@@ -5,6 +5,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.unit.dp
 
 fun DrawScope.drawProceduralShip(shipId: String, center: Offset, size: Float, paintColor: Color) {
     val h = size / 2f
@@ -38,15 +39,15 @@ fun DrawScope.drawProceduralShip(shipId: String, center: Offset, size: Float, pa
         "nova_phantom" -> {
             // Smooth curved crescent boomerang
             path.moveTo(center.x, center.y - h * 0.9f)
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x - h * 0.9f, center.y - h * 0.3f,
                 center.x - h * 0.95f, center.y + h * 0.8f
             ) // Left tip
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x, center.y + h * 0.2f,
                 center.x + h * 0.95f, center.y + h * 0.8f
             ) // Right tip
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x + h * 0.9f, center.y - h * 0.3f,
                 center.x, center.y - h * 0.9f
             )
@@ -127,17 +128,17 @@ fun DrawScope.drawProceduralShip(shipId: String, center: Offset, size: Float, pa
         else -> {
             // Custom majestic Omega crescent ring shape
             path.moveTo(center.x, center.y - h)
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x - h * 1.1f, center.y - h * 0.5f,
                 center.x - h * 1.0f, center.y + h * 0.8f
             )
             path.lineTo(center.x - h * 0.6f, center.y + h * 0.4f)
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x, center.y - h * 0.1f,
                 center.x + h * 0.6f, center.y + h * 0.4f
             )
             path.lineTo(center.x + h * 1.0f, center.y + h * 0.8f)
-            path.quadraticTo(
+            path.quadraticBezierTo(
                 center.x + h * 1.1f, center.y - h * 0.5f,
                 center.x, center.y - h
             )

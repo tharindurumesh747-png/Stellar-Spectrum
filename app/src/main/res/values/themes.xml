@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme. -->
+    <style name="Theme.MyApplication" parent="android:Theme.Material.NoActionBar">
+        <!-- Core Android Material NoActionBar parent theme is built into the OS SDK -->
+    </style>
+</resources>

@@ -501,8 +501,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                                     type = ParticleType.EXPLOSION,
                                     x = enemy.x,
                                     y = enemy.y,
-                                    vx = (-250f..250f).random().toFloat(),
-                                    vy = (-250f..250f).random().toFloat(),
+                                    vx = -250f + kotlin.random.Random.nextFloat() * 500f,
+                                    vy = -250f + kotlin.random.Random.nextFloat() * 500f,
                                     size = (8..22).random().toFloat(),
                                     color = bullet.color.composeColor,
                                     maxLife = 0.45f
@@ -547,7 +547,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             } else if (enemy.type == EnemyType.BOSS) {
                                 bossesKilled++
                                 SoundSynth.playBossDie()
-                                triggerAchievementProgress("boss", 1)
+                                viewModelScope.launch { triggerAchievementProgress("boss", 1) }
                                 registerMissionProgress(3, 1)
                                 
                                 // massive reward
@@ -573,7 +573,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             currentCombo = minOf(5, currentCombo + 1)
                             comboTimer = 2.5f // 2.5 seconds window link
                             
-                            triggerAchievementProgress("combo", currentCombo)
+                            viewModelScope.launch { triggerAchievementProgress("combo", currentCombo) }
                             
                             // Spark combo flash particle of text
                             if (currentCombo > 1) {
@@ -612,8 +612,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                                     type = ParticleType.EXPLOSION,
                                     x = bullet.x,
                                     y = bullet.y,
-                                    vx = (-200f..200f).random().toFloat(),
-                                    vy = (-200f..200f).random().toFloat(),
+                                    vx = -200f + kotlin.random.Random.nextFloat() * 400f,
+                                    vy = -200f + kotlin.random.Random.nextFloat() * 400f,
                                     size = 12f,
                                     color = Color.Red,
                                     maxLife = 0.35f
