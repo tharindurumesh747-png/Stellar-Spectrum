@@ -46,7 +46,7 @@ jobs:
           pip install --upgrade pip setuptools wheel
           pip install "sh>=1.10,<2.0"
           pip install cython==0.29.33
-          pip install python-for-android==2023.2.14
+          pip install python-for-android==2023.2.10
           pip install buildozer==1.5.0
 
       - name: Restore build cache
@@ -55,9 +55,9 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v5-${{ hashFiles('buildozer.spec') }}
+          key: stellar-build-v6-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v5-
+            stellar-build-v6-
 
       - name: Pre-download NDK
         run: |
@@ -67,9 +67,12 @@ jobs:
             for i in 1 2 3; do
               wget -q --timeout=120 \
                 https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
-                -O "$NDK_ZIP" && break
+                -O "$NDK_ZIP" && echo "NDK downloaded" && break
+              echo "Retry $i..."
               sleep 15
             done
+          else
+            echo "NDK already cached"
           fi
 
       - name: Build APK
