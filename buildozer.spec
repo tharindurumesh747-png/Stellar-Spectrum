@@ -6,8 +6,8 @@ source.dir = .
 source.include_exts = py,png,jpg,jpeg,ttf,json,ogg,wav
 version = 1.0.0
 
-# kivy 2.3.0 has better Python 3.10 compatibility
-requirements = python3,kivy==2.3.0
+# Use stable kivy 2.1.0 — known to work with p4a 2023.2.14
+requirements = python3,kivy==2.1.0
 
 orientation = portrait
 fullscreen = 1
