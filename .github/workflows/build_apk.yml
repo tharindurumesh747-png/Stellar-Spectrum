@@ -34,33 +34,16 @@ jobs:
             autoconf automake libtool \
             cmake pkg-config ccache lld
 
-      - name: Install buildozer and p4a
+      - name: Fix sdkmanager path
         run: |
-          pip install --upgrade pip setuptools wheel
-          pip install "cython>=0.29,<3"
-          pip install "sh>=1.14,<2"
-          pip install python-for-android==2023.9.16
-          pip install buildozer==1.5.0
-
-      - name: Setup Android SDK and NDK paths
-        run: |
-          # Use the pre-installed SDK/NDK on the GitHub runner
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
-
-          # Point buildozer to use existing SDK
-          mkdir -p ~/.buildozer/android/platform
-          ln -sf /usr/local/lib/android/sdk \
-            ~/.buildozer/android/platform/android-sdk
-
-          # Use NDK 27 that's already installed
-          NDK_PATH=/usr/local/lib/android/sdk/ndk/27.3.13750724
-          ln -sf $NDK_PATH \
-            ~/.buildozer/android/platform/android-ndk-r27c
-          echo "ANDROIDNDK=$NDK_PATH" >> $GITHUB_ENV
-          echo "NDK linked: $(ls ~/.buildozer/android/platform/)"
+          # Create old-style tools/bin path buildozer looks for
+          mkdir -p /usr/local/lib/android/sdk/tools/bin
+          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+                 /usr/local/lib/android/sdk/tools/bin/sdkmanager
+          ln -sf /usr/local/lib/android/sdk/cmdline-tools/latest/bin/avdmanager \
+                 /usr/local/lib/android/sdk/tools/bin/avdmanager
+          echo "sdkmanager path fixed"
+          ls -la /usr/local/lib/android/sdk/tools/bin/
 
       - name: Accept SDK licenses
         run: |
@@ -70,13 +53,33 @@ jobs:
             "platforms;android-33" \
             "build-tools;33.0.2" 2>/dev/null || true
 
+      - name: Install buildozer and p4a
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install "cython>=0.29,<3"
+          pip install "sh>=2,<3"
+          pip install buildozer==1.5.0
+          # Do NOT install python-for-android separately
+          # buildozer 1.5.0 will clone p4a master which needs sh>=2 — matches!
+
+      - name: Setup paths
+        run: |
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          # Symlink SDK into buildozer's expected location
+          mkdir -p ~/.buildozer/android/platform
+          ln -sf /usr/local/lib/android/sdk \
+            ~/.buildozer/android/platform/android-sdk
+
       - name: Restore buildozer cache
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-v13-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v14-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v13-
+            buildozer-v14-
 
       - name: Build APK
         run: |
