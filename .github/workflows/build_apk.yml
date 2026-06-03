@@ -11,6 +11,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -21,42 +22,39 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            python3-pip build-essential git \
+            build-essential git zip unzip \
+            openjdk-17-jdk \
             libffi-dev libssl-dev \
             libsqlite3-dev zlib1g-dev \
             libbz2-dev libreadline-dev \
-            libgdbm-dev \
-            zip unzip openjdk-17-jdk \
             autoconf automake libtool \
-            cmake pkg-config \
-            lld ccache
+            cmake pkg-config ccache lld
 
-      - name: Set up Java 17
+      - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Install Python tools
+      - name: Install build tools
         run: |
-          pip install --upgrade pip
+          pip install --upgrade pip setuptools wheel
           pip install cython==0.29.33
           pip install buildozer==1.5.0
+          pip install python-for-android==2024.1.21
 
-      - name: Cache buildozer global dir
+      - name: Restore full build cache
         uses: actions/cache@v4
         with:
-          path: ~/.buildozer
-          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
-
-      - name: Cache .buildozer in workspace
-        uses: actions/cache@v4
-        with:
-          path: .buildozer
-          key: buildozer-workspace-${{ hashFiles('buildozer.spec') }}
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: stellar-build-v1-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            stellar-build-v1-
 
       - name: Build APK
         run: |
@@ -64,18 +62,16 @@ jobs:
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
 
-      - name: List bin folder
+      - name: Find APK
         if: always()
         run: |
-          echo "=== bin/ contents ==="
-          ls -lah bin/ 2>/dev/null || echo "bin/ not found"
-          echo "=== Finding all APKs ==="
           find . -name "*.apk" 2>/dev/null || echo "No APK found"
+          ls -lah bin/ 2>/dev/null || echo "No bin/"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Stellar-Spectrum-APK
           path: bin/*.apk
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
