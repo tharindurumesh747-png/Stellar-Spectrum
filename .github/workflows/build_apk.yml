@@ -44,14 +44,10 @@ jobs:
       - name: Install Python tools
         run: |
           pip install --upgrade pip setuptools wheel
-          pip install "sh>=1.10,<2.0"
-          pip install cython==0.29.33
+          pip install "sh>=2,<3.0"
+          pip install "cython>=0.29,<3.0"
           pip install python-for-android==2026.5.9
           pip install buildozer==1.5.0
-          # Create pip constraints file so isolated envs also respect sh version
-          echo "sh>=1.10,<2.0" > /home/runner/constraints.txt
-          echo "cython>=0.29,<3.0" >> /home/runner/constraints.txt
-          echo "PIP_CONSTRAINT=/home/runner/constraints.txt" >> $GITHUB_ENV
 
       - name: Restore build cache
         uses: actions/cache@v4
@@ -59,9 +55,9 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v7-${{ hashFiles('buildozer.spec') }}
+          key: stellar-build-v8-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v7-
+            stellar-build-v8-
 
       - name: Pre-download NDK
         run: |
@@ -85,7 +81,6 @@ jobs:
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ACCEPT_SDK_LICENCE: y
-          PIP_CONSTRAINT: /home/runner/constraints.txt
 
       - name: Find APK
         if: always()
