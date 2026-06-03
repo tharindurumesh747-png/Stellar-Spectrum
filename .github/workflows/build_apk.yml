@@ -48,30 +48,42 @@ jobs:
           pip install "sh>=2,<3"
           pip install buildozer==1.2.0
 
+      - name: Download and install NDK manually
+        run: |
+          NDK_DIR=~/.buildozer/android/platform/android-ndk-r25b
+          if [ ! -d "$NDK_DIR" ]; then
+            echo "Downloading NDK..."
+            mkdir -p ~/.buildozer/android/platform
+            wget --tries=5 --timeout=300 --progress=dot:giga \
+              https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
+              -O /tmp/ndk.zip
+            echo "Unzipping NDK..."
+            unzip -q /tmp/ndk.zip -d ~/.buildozer/android/platform/
+            echo "NDK installed at: $NDK_DIR"
+            ls -la ~/.buildozer/android/platform/
+          else
+            echo "NDK already exists"
+          fi
+
+      - name: Patch buildozer to skip NDK download
+        run: |
+          # Find buildozer android target file
+          BFILE=$(python -c "import buildozer.targets.android as a; print(a.__file__)")
+          echo "Patching: $BFILE"
+          # Replace the NDK download URL check so it uses our pre-installed NDK
+          sudo sed -i 's/android-ndk-r25b-linux-x86_64.zip/android-ndk-r25b-linux.zip/g' "$BFILE"
+          echo "Patch applied"
+          grep "android-ndk" "$BFILE" | head -5
+
       - name: Restore buildozer cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.buildozer
             .buildozer
-          key: buildozer-v11-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v12-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v11-
-
-      - name: Pre-download NDK r25b
-        run: |
-          mkdir -p ~/.buildozer/android/platform
-          # buildozer 1.2.0 looks for this exact filename
-          NDK_FILE=~/.buildozer/android/platform/android-ndk-r25b-linux-x86_64.zip
-          if [ ! -f "$NDK_FILE" ]; then
-            echo "Downloading NDK r25b..."
-            wget --tries=3 --timeout=300 --progress=dot:giga \
-              https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
-              -O "$NDK_FILE"
-            echo "NDK download complete: $(ls -lh $NDK_FILE)"
-          else
-            echo "NDK already cached: $(ls -lh $NDK_FILE)"
-          fi
+            buildozer-v12-
 
       - name: Build APK
         run: |
