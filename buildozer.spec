@@ -11,10 +11,11 @@ fullscreen = 1
 android.permissions = VIBRATE
 android.api = 33
 android.minapi = 24
-android.ndk = 25b
+android.ndk = 27c
+android.ndk_path = /usr/local/lib/android/sdk/ndk/27.3.13750724
+android.sdk_path = /usr/local/lib/android/sdk
 android.accept_sdk_license = True
 android.archs = arm64-v8a
-p4a.branch = stable
 
 [buildozer]
 log_level = 2
