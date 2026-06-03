@@ -41,18 +41,20 @@ jobs:
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Force Python 3.10 everywhere
+      - name: Install Python tools with correct versions
         run: |
-          echo "PYTHONPATH=" >> $GITHUB_ENV
-          python3.10 -m pip install --upgrade pip setuptools wheel
-          python3.10 -m pip install cython==0.29.33
-          python3.10 -m pip install buildozer==1.5.0
-          python3.10 -m pip install python-for-android==2024.1.21
-          # Make sure python3 points to 3.10
+          pip install --upgrade pip setuptools wheel
+          pip install cython==0.29.33
+          pip install "sh>=1.10,<2.0"
+          pip install python-for-android==2024.1.21
+          pip install buildozer==1.5.0
+          # Force Python 3.10 as default
           sudo ln -sf $(which python3.10) /usr/local/bin/python3
           sudo ln -sf $(which python3.10) /usr/local/bin/python
           python --version
           python3 --version
+          # Verify sh version
+          python -c "import sh; print('sh version:', sh.__version__)"
 
       - name: Restore build cache
         uses: actions/cache@v4
@@ -60,9 +62,27 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v3-${{ hashFiles('buildozer.spec') }}
+          key: stellar-build-v4-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v3-
+            stellar-build-v4-
+
+      - name: Pre-download Android NDK
+        run: |
+          mkdir -p ~/.buildozer/android/platform
+          NDK_ZIP="$HOME/.buildozer/android/platform/android-ndk-r25b-linux.zip"
+          if [ ! -f "$NDK_ZIP" ]; then
+            echo "Downloading NDK..."
+            for i in 1 2 3; do
+              wget -q --timeout=120 --tries=3 \
+                https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
+                -O "$NDK_ZIP" && echo "NDK downloaded OK" && break
+              echo "Retry $i failed, waiting..."
+              sleep 10
+            done
+          else
+            echo "NDK already cached"
+          fi
+          ls -lh "$NDK_ZIP" 2>/dev/null || echo "NDK download failed"
 
       - name: Build APK
         run: |
