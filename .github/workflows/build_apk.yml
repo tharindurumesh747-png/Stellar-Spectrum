@@ -27,69 +27,64 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             python3-pip build-essential \
-            git zip unzip wget \
-            openjdk-17-jdk \
+            git zip unzip \
             libffi-dev libssl-dev \
             libsqlite3-dev zlib1g-dev \
             libbz2-dev libreadline-dev \
             autoconf automake libtool \
-            cmake pkg-config ccache lld \
-            libltdl-dev libgdbm-dev
+            cmake pkg-config ccache lld
 
-      - name: Set JAVA_HOME
-        run: |
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
-
-      - name: Install buildozer
+      - name: Install buildozer and p4a
         run: |
           pip install --upgrade pip setuptools wheel
           pip install "cython>=0.29,<3"
-          pip install "sh>=2,<3"
-          pip install buildozer==1.2.0
+          pip install "sh>=1.14,<2"
+          pip install python-for-android==2023.9.16
+          pip install buildozer==1.5.0
 
-      - name: Download and install NDK manually
+      - name: Setup Android SDK and NDK paths
         run: |
-          NDK_DIR=~/.buildozer/android/platform/android-ndk-r25b
-          if [ ! -d "$NDK_DIR" ]; then
-            echo "Downloading NDK..."
-            mkdir -p ~/.buildozer/android/platform
-            wget --tries=5 --timeout=300 --progress=dot:giga \
-              https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
-              -O /tmp/ndk.zip
-            echo "Unzipping NDK..."
-            unzip -q /tmp/ndk.zip -d ~/.buildozer/android/platform/
-            echo "NDK installed at: $NDK_DIR"
-            ls -la ~/.buildozer/android/platform/
-          else
-            echo "NDK already exists"
-          fi
+          # Use the pre-installed SDK/NDK on the GitHub runner
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Patch buildozer to skip NDK download
+          # Point buildozer to use existing SDK
+          mkdir -p ~/.buildozer/android/platform
+          ln -sf /usr/local/lib/android/sdk \
+            ~/.buildozer/android/platform/android-sdk
+
+          # Use NDK 27 that's already installed
+          NDK_PATH=/usr/local/lib/android/sdk/ndk/27.3.13750724
+          ln -sf $NDK_PATH \
+            ~/.buildozer/android/platform/android-ndk-r27c
+          echo "ANDROIDNDK=$NDK_PATH" >> $GITHUB_ENV
+          echo "NDK linked: $(ls ~/.buildozer/android/platform/)"
+
+      - name: Accept SDK licenses
         run: |
-          # Find buildozer android target file
-          BFILE=$(python -c "import buildozer.targets.android as a; print(a.__file__)")
-          echo "Patching: $BFILE"
-          # Replace the NDK download URL check so it uses our pre-installed NDK
-          sudo sed -i 's/android-ndk-r25b-linux-x86_64.zip/android-ndk-r25b-linux.zip/g' "$BFILE"
-          echo "Patch applied"
-          grep "android-ndk" "$BFILE" | head -5
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+            --licenses 2>/dev/null || true
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-33" \
+            "build-tools;33.0.2" 2>/dev/null || true
 
       - name: Restore buildozer cache
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-v12-${{ hashFiles('buildozer.spec') }}
+          path: .buildozer
+          key: buildozer-v13-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v12-
+            buildozer-v13-
 
       - name: Build APK
         run: |
           buildozer android debug 2>&1
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
       - name: Find APK
         if: always()
