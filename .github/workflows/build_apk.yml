@@ -52,15 +52,16 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v1-${{ hashFiles('buildozer.spec') }}
+          key: stellar-build-v2-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v1-
+            stellar-build-v2-
 
       - name: Build APK
         run: |
-          yes | buildozer android debug 2>&1
+          buildozer android debug 2>&1
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+          ACCEPT_SDK_LICENCE: y
 
       - name: Find APK
         if: always()
