@@ -32,33 +32,41 @@ jobs:
             libsqlite3-dev zlib1g-dev \
             libbz2-dev libreadline-dev \
             autoconf automake libtool \
-            cmake pkg-config ccache lld
+            cmake pkg-config ccache lld \
+            libsdl2-dev libsdl2-image-dev \
+            libsdl2-mixer-dev libsdl2-ttf-dev
 
       - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Install build tools
+      - name: Force Python 3.10 everywhere
         run: |
-          pip install --upgrade pip setuptools wheel
-          pip install cython==0.29.33
-          pip install buildozer==1.5.0
-          pip install python-for-android==2024.1.21
+          echo "PYTHONPATH=" >> $GITHUB_ENV
+          python3.10 -m pip install --upgrade pip setuptools wheel
+          python3.10 -m pip install cython==0.29.33
+          python3.10 -m pip install buildozer==1.5.0
+          python3.10 -m pip install python-for-android==2024.1.21
+          # Make sure python3 points to 3.10
+          sudo ln -sf $(which python3.10) /usr/local/bin/python3
+          sudo ln -sf $(which python3.10) /usr/local/bin/python
+          python --version
+          python3 --version
 
-      - name: Restore full build cache
+      - name: Restore build cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v2-${{ hashFiles('buildozer.spec') }}
+          key: stellar-build-v3-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v2-
+            stellar-build-v3-
 
       - name: Build APK
         run: |
-          buildozer android debug 2>&1
+          python3.10 -m buildozer android debug 2>&1
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ACCEPT_SDK_LICENCE: y
