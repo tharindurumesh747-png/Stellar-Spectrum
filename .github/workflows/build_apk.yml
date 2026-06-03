@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -33,34 +36,23 @@ jobs:
             libbz2-dev \
             libreadline-dev \
             build-essential \
-            ccache \
-            lld \
-            cmake \
-            pkg-config \
-            python3-dev
+            ccache lld cmake \
+            pkg-config python3-dev
 
       - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Cache Buildozer global directory
+      - name: Cache Buildozer
         uses: actions/cache@v4
         with:
           path: |
             ~/.buildozer
             ~/.gradle
-          key: buildozer-${{ runner.os }}-v2-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-${{ runner.os }}-v3-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-${{ runner.os }}-v2-
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            pip-${{ runner.os }}-
+            buildozer-${{ runner.os }}-v3-
 
       - name: Install Buildozer and Cython
         run: |
@@ -75,29 +67,54 @@ jobs:
           echo "d56f5187479451eabf01fb78af6dfcb131a6481e" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
           echo "84831b9409646a918e30573bab4c9c91346d8abd" >> ~/.buildozer/android/platform/android-sdk/licenses/android-sdk-license
 
-      - name: Build APK with Buildozer
+      - name: Build APK
         run: |
-          buildozer -v android debug 2>&1 | tail -200
+          buildozer -v android debug
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          ANDROID_SDK_ROOT: /home/runner/.buildozer/android/platform/android-sdk
 
-      - name: Find APK
+      - name: Find APK (search everywhere)
         run: |
-          echo "=== Searching for APK ==="
-          find . -name "*.apk" 2>/dev/null
-          find bin/ -name "*.apk" 2>/dev/null || echo "No APK in bin/"
+          echo "=== Searching entire workspace for APK ==="
+          find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null
+          find ~/.buildozer -name "*.apk" 2>/dev/null
+          echo "=== bin/ contents ==="
+          ls -lah bin/ 2>/dev/null || echo "No bin/ folder"
+          echo "=== .buildozer/android/platform contents ==="
+          ls -lah .buildozer/android/ 2>/dev/null || echo "No .buildozer/android/"
+
+      - name: Copy APK to workspace
+        run: |
+          mkdir -p bin
+          # Search in all possible locations
+          APK=$(find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find ~/.buildozer -name "*.apk" 2>/dev/null | head -1)
+          fi
+          if [ -n "$APK" ]; then
+            echo "Found APK at: $APK"
+            cp "$APK" bin/stellar-spectrum-debug.apk
+            echo "APK_FOUND=true" >> $GITHUB_ENV
+          else
+            echo "APK_FOUND=false" >> $GITHUB_ENV
+            echo "❌ No APK found anywhere!"
+          fi
 
       - name: Upload APK
+        if: env.APK_FOUND == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: Stellar-Spectrum-APK
-          path: bin/*.apk
-          if-no-files-found: warn
+          path: bin/stellar-spectrum-debug.apk
           retention-days: 30
 
-      - name: Build result
-        if: always()
-        run: |
-          echo "=== Build Complete ==="
-          ls -lh bin/ 2>/dev/null || echo "bin/ folder not found"
+      - name: Upload entire bin folder as fallback
+        if: env.APK_FOUND != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-debug
+          path: |
+            bin/
+            .buildozer/android/app/
+          if-no-files-found: warn
+          retention-days: 7
