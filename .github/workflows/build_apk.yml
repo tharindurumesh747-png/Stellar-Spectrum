@@ -11,7 +11,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
@@ -22,71 +22,67 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install system dependencies
+      - name: Install all dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            build-essential git zip unzip \
+            python3-pip \
+            build-essential \
+            git \
+            zip unzip \
             openjdk-17-jdk \
-            libffi-dev libssl-dev \
-            libsqlite3-dev zlib1g-dev \
-            libbz2-dev libreadline-dev \
-            autoconf automake libtool \
-            cmake pkg-config ccache lld \
-            libsdl2-dev libsdl2-image-dev \
-            libsdl2-mixer-dev libsdl2-ttf-dev
+            libffi-dev \
+            libssl-dev \
+            libsqlite3-dev \
+            zlib1g-dev \
+            libbz2-dev \
+            libreadline-dev \
+            autoconf \
+            automake \
+            libtool \
+            cmake \
+            pkg-config \
+            ccache \
+            lld \
+            libltdl-dev \
+            libgdbm-dev \
+            libnss3-dev \
+            libexpat1-dev \
+            libmpdec-dev
 
       - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Install Python tools
+      - name: Install buildozer and dependencies
         run: |
-          pip install --upgrade pip setuptools wheel
-          pip install "sh>=2,<3.0"
-          pip install "cython>=0.29,<3.0"
-          pip install python-for-android==2026.5.9
+          pip install --upgrade pip
+          pip install "sh>=2,<3"
+          pip install "cython>=0.29,<3"
           pip install buildozer==1.5.0
 
-      - name: Restore build cache
+      - name: Restore buildozer cache
         uses: actions/cache@v4
         with:
           path: |
             ~/.buildozer
             .buildozer
-          key: stellar-build-v8-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v9-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            stellar-build-v8-
-
-      - name: Pre-download NDK
-        run: |
-          mkdir -p ~/.buildozer/android/platform
-          NDK_ZIP="$HOME/.buildozer/android/platform/android-ndk-r25b-linux.zip"
-          if [ ! -f "$NDK_ZIP" ]; then
-            for i in 1 2 3; do
-              wget -q --timeout=120 \
-                https://dl.google.com/android/repository/android-ndk-r25b-linux.zip \
-                -O "$NDK_ZIP" && echo "NDK downloaded" && break
-              echo "Retry $i..."
-              sleep 15
-            done
-          else
-            echo "NDK already cached"
-          fi
+            buildozer-v9-
 
       - name: Build APK
         run: |
           buildozer android debug 2>&1
         env:
           JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          ACCEPT_SDK_LICENCE: y
 
       - name: Find APK
         if: always()
         run: |
-          find . -name "*.apk" 2>/dev/null || echo "No APK found"
-          ls -lah bin/ 2>/dev/null || echo "No bin/"
+          echo "=== All APK files ==="
+          find / -name "*.apk" 2>/dev/null | grep -v proc || echo "None found"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
