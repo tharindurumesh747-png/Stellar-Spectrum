@@ -16,122 +16,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.10
-        uses: actions/setup-python@v5
+      - name: Build with Buildozer Action
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
         with:
-          python-version: '3.10'
+          command: android debug
+          buildozer_version: stable
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            git zip unzip curl wget \
-            openjdk-17-jdk \
-            autoconf automake libtool \
-            libffi-dev libssl-dev \
-            libltdl-dev libsqlite3-dev \
-            zlib1g-dev libgdbm-dev \
-            libbz2-dev libreadline-dev \
-            build-essential ccache lld \
-            cmake pkg-config python3-dev
-
-      - name: Set JAVA_HOME
-        run: |
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
-
-      - name: Install Android SDK manually
-        run: |
-          # Create SDK directory
-          mkdir -p $HOME/android-sdk/cmdline-tools
-
-          # Download latest cmdline-tools
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdtools.zip
-          unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
-          mv /tmp/cmdtools/cmdline-tools $HOME/android-sdk/cmdline-tools/latest
-
-          # Set SDK env vars
-          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
-          echo "$HOME/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$HOME/android-sdk/platform-tools" >> $GITHUB_PATH
-
-          # Accept all licenses
-          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
-
-          # Install required SDK packages
-          $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
-            "platforms;android-33" \
-            "build-tools;33.0.2" \
-            "platform-tools"
-
-          echo "✅ Android SDK installed"
-
-      - name: Install Android NDK 25b
-        run: |
-          mkdir -p $HOME/android-sdk/ndk
-          wget -q https://dl.google.com/android/repository/android-ndk-r25b-linux.zip -O /tmp/ndk.zip
-          unzip -q /tmp/ndk.zip -d $HOME/android-sdk/ndk
-          echo "ANDROID_NDK_HOME=$HOME/android-sdk/ndk/android-ndk-r25b" >> $GITHUB_ENV
-          echo "NDK installed at $HOME/android-sdk/ndk/android-ndk-r25b"
-
-      - name: Cache pip packages
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-buildozer
-
-      - name: Install Buildozer and Cython
-        run: |
-          pip install --upgrade pip setuptools wheel
-          pip install cython==0.29.33
-          pip install buildozer==1.5.0
-
-      - name: Configure Buildozer to use our SDK
-        run: |
-          mkdir -p ~/.buildozer/android/platform
-          # Symlink our SDK into buildozer's expected location
-          ln -sf $HOME/android-sdk ~/.buildozer/android/platform/android-sdk
-          ln -sf $HOME/android-sdk/ndk/android-ndk-r25b ~/.buildozer/android/platform/android-ndk-r25b
-
-          # Create old-style tools/bin path that buildozer looks for
-          mkdir -p $HOME/android-sdk/tools/bin
-          ln -sf $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager \
-                 $HOME/android-sdk/tools/bin/sdkmanager
-
-          echo "✅ Buildozer SDK paths configured"
-          ls -la ~/.buildozer/android/platform/
-
-      - name: Build APK
-        run: |
-          buildozer -v android debug
-        env:
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
-          ANDROID_SDK_ROOT: /home/runner/android-sdk
-          ANDROID_HOME: /home/runner/android-sdk
-          ANDROID_NDK_HOME: /home/runner/android-sdk/ndk/android-ndk-r25b
-
-      - name: Find and upload APK
-        run: |
-          echo "=== Searching for APK ==="
-          find / -name "*.apk" 2>/dev/null | grep -v "proc" || echo "No APK found"
-          mkdir -p bin
-          APK=$(find $GITHUB_WORKSPACE -name "*.apk" 2>/dev/null | head -1)
-          if [ -z "$APK" ]; then
-            APK=$(find $HOME -name "*.apk" 2>/dev/null | head -1)
-          fi
-          if [ -n "$APK" ]; then
-            echo "✅ Found: $APK"
-            cp "$APK" bin/stellar-spectrum.apk
-            echo "APK_FOUND=true" >> $GITHUB_ENV
-          else
-            echo "APK_FOUND=false" >> $GITHUB_ENV
-          fi
-
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Stellar-Spectrum-APK
-          path: bin/stellar-spectrum.apk
-          if-no-files-found: warn
+          path: ${{ steps.buildozer.outputs.filename }}
           retention-days: 30
