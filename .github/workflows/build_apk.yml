@@ -22,45 +22,31 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install all dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            python3-pip \
-            build-essential \
-            git \
-            zip unzip \
+            python3-pip build-essential \
+            git zip unzip \
             openjdk-17-jdk \
-            libffi-dev \
-            libssl-dev \
-            libsqlite3-dev \
-            zlib1g-dev \
-            libbz2-dev \
-            libreadline-dev \
-            autoconf \
-            automake \
-            libtool \
-            cmake \
-            pkg-config \
-            ccache \
-            lld \
-            libltdl-dev \
-            libgdbm-dev \
-            libnss3-dev \
-            libexpat1-dev \
-            libmpdec-dev
+            libffi-dev libssl-dev \
+            libsqlite3-dev zlib1g-dev \
+            libbz2-dev libreadline-dev \
+            autoconf automake libtool \
+            cmake pkg-config ccache lld \
+            libltdl-dev libgdbm-dev
 
       - name: Set JAVA_HOME
         run: |
           echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
           echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      - name: Install buildozer and dependencies
+      - name: Install buildozer
         run: |
-          pip install --upgrade pip
-          pip install "sh>=2,<3"
+          pip install --upgrade pip setuptools wheel
           pip install "cython>=0.29,<3"
-          pip install buildozer==1.5.0
+          pip install "sh>=2,<3"
+          pip install buildozer==1.2.0
 
       - name: Restore buildozer cache
         uses: actions/cache@v4
@@ -68,9 +54,9 @@ jobs:
           path: |
             ~/.buildozer
             .buildozer
-          key: buildozer-v9-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v10-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v9-
+            buildozer-v10-
 
       - name: Build APK
         run: |
@@ -81,8 +67,8 @@ jobs:
       - name: Find APK
         if: always()
         run: |
-          echo "=== All APK files ==="
-          find / -name "*.apk" 2>/dev/null | grep -v proc || echo "None found"
+          find . -name "*.apk" 2>/dev/null || echo "No APK found"
+          ls -lah bin/ 2>/dev/null || echo "No bin/"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
