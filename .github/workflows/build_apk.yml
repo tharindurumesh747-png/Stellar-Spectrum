@@ -22,7 +22,32 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install ALL possible build dependencies
+      - name: Block Python 3.14 completely
+        run: |
+          # Remove or hide Python 3.14 so nothing can use it
+          sudo rm -f /usr/bin/python3.14 2>/dev/null || true
+          sudo rm -f /usr/local/bin/python3.14 2>/dev/null || true
+          # Force all python3 calls to use 3.10
+          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/local/bin/python3
+          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/local/bin/python
+          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/bin/python3
+          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/bin/python
+          # Verify
+          python --version
+          python3 --version
+          which python3
+          ls /usr/bin/python* 2>/dev/null
+          ls /usr/local/bin/python* 2>/dev/null
+
+      - name: Create swap space
+        run: |
+          sudo fallocate -l 4G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
+
+      - name: Install ALL build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
@@ -39,18 +64,12 @@ jobs:
             liblzma-dev libmpdec-dev \
             tk-dev uuid-dev \
             libncursesw5-dev \
-            xz-utils \
-            patchelf \
-            nasm \
-            libx11-dev
+            xz-utils patchelf nasm
 
-      - name: Set JAVA_HOME to openjdk-17
+      - name: Set JAVA_HOME
         run: |
-          # Install openjdk-17 explicitly to have a known path
-          sudo apt-get install -y openjdk-17-jdk
           JAVA_PATH=$(update-alternatives --list java | grep java-17 | head -1)
           JAVA_HOME=$(dirname $(dirname $JAVA_PATH))
-          echo "Found Java at: $JAVA_HOME"
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
           $JAVA_HOME/bin/java -version
@@ -89,9 +108,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-v17-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v19-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v17-
+            buildozer-v19-
 
       - name: Build APK
         run: |
