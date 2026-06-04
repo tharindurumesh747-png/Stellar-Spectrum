@@ -41,10 +41,12 @@ jobs:
 
       - name: Create swap space
         run: |
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 status=progress
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          if [ ! -f /swapfile ]; then
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+          fi
+          sudo swapon /swapfile 2>/dev/null || true
           free -h
 
       - name: Install ALL build dependencies
