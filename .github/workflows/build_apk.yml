@@ -84,4 +84,4 @@ jobs:
         run: |
           echo "✅ BUILD COMPLETE!"
           echo "📦 APK ready to download from Actions > Artifacts"
-          ls -lh bin/*.apk
+          ls -lh bin/*.apk 
