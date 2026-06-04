@@ -25,6 +25,12 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install Gradle 8.7
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.7-bin.zip -O /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /opt/gradle
+          echo "/opt/gradle/gradle-8.7/bin" >> $GITHUB_PATH
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -35,16 +41,15 @@ jobs:
           restore-keys: |
             gradle-
 
-      - name: Make gradlew executable
-        run: chmod +x ./gradlew
-
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          gradle assembleDebug --stacktrace
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
 
       - name: Find APK
         run: |
-          find . -name "*.apk" 2>/dev/null
-          ls -lah app/build/outputs/apk/debug/ 2>/dev/null || echo "No APK folder"
+          find . -name "*.apk" 2>/dev/null || echo "No APK found"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
