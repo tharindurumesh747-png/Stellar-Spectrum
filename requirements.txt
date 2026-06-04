@@ -1,1 +1,6 @@
-pygame==2.5.2
+# Python/Kivy Requirements for Stellar Spectrum
+# Optimized for Vivo Y93 (Snapdragon 439 / Helio P22)
+kivy==2.3.0
+cython>=0.29.33,<3.0
+hostpython3==3.11.5
+android
