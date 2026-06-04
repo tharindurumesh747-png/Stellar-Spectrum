@@ -22,33 +22,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Block Python 3.14 completely
-        run: |
-          # Remove or hide Python 3.14 so nothing can use it
-          sudo rm -f /usr/bin/python3.14 2>/dev/null || true
-          sudo rm -f /usr/local/bin/python3.14 2>/dev/null || true
-          # Force all python3 calls to use 3.10
-          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/local/bin/python3
-          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/local/bin/python
-          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/bin/python3
-          sudo ln -sf /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 /usr/bin/python
-          # Verify
-          python --version
-          python3 --version
-          which python3
-          ls /usr/bin/python* 2>/dev/null
-          ls /usr/local/bin/python* 2>/dev/null
-
-      - name: Create swap space
-        run: |
-          if [ ! -f /swapfile ]; then
-            sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-          fi
-          sudo swapon /swapfile 2>/dev/null || true
-          free -h
-
       - name: Install ALL build dependencies
         run: |
           sudo apt-get update -qq
@@ -68,6 +41,16 @@ jobs:
             libncursesw5-dev \
             xz-utils patchelf nasm
 
+      - name: Create swap space
+        run: |
+          if [ ! -f /swapfile ]; then
+            sudo dd if=/dev/zero of=/swapfile bs=1M count=4096
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+          fi
+          sudo swapon /swapfile 2>/dev/null || true
+          free -h
+
       - name: Set JAVA_HOME
         run: |
           JAVA_PATH=$(update-alternatives --list java | grep java-17 | head -1)
@@ -75,6 +58,24 @@ jobs:
           echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
           echo "$JAVA_HOME/bin" >> $GITHUB_PATH
           $JAVA_HOME/bin/java -version
+
+      - name: Force Python 3.10 for buildozer only
+        run: |
+          # Only add to PATH — do NOT replace system python3 symlinks
+          # This makes python3.10 the first found in PATH for buildozer
+          PYTHON310=/opt/hostedtoolcache/Python/3.10.20/x64/bin
+          echo "$PYTHON310" >> $GITHUB_PATH
+          # Create a wrapper script that forces python3.10
+          mkdir -p $HOME/bin
+          cat > $HOME/bin/python3 << 'WRAPPER'
+          #!/bin/bash
+          exec /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 "$@"
+          WRAPPER
+          chmod +x $HOME/bin/python3
+          echo "$HOME/bin" >> $GITHUB_PATH
+          # Verify
+          echo "Python version check:"
+          /opt/hostedtoolcache/Python/3.10.20/x64/bin/python3.10 --version
 
       - name: Fix sdkmanager path
         run: |
@@ -110,9 +111,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .buildozer
-          key: buildozer-v19-${{ hashFiles('buildozer.spec') }}
+          key: buildozer-v20-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v19-
+            buildozer-v20-
 
       - name: Build APK
         run: |
