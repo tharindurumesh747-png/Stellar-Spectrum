@@ -18,7 +18,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -83,7 +82,7 @@ fun GameplayScreen(viewModel: GameViewModel) {
             lastTimeNanos = now
             viewModel.updateGame(dt)
 
-            // Auto-fire toward center-top when dragging
+            // Auto-fire toward top while dragging
             if (isDragging) {
                 viewModel.fireBulletAt(lastTouchX, lastTouchY - 200f)
             }
@@ -103,7 +102,6 @@ fun GameplayScreen(viewModel: GameViewModel) {
                         isDragging = true
                         lastTouchX = tx
                         lastTouchY = ty
-                        // Move ship to touch position immediately
                         viewModel.playerShipState.value.targetX = tx.coerceIn(80f, 1000f)
                         viewModel.playerShipState.value.targetY = ty.coerceIn(200f, 1600f)
                         true
@@ -111,10 +109,8 @@ fun GameplayScreen(viewModel: GameViewModel) {
                     MotionEvent.ACTION_MOVE -> {
                         lastTouchX = tx
                         lastTouchY = ty
-                        // Continuously update ship target to follow finger
                         viewModel.playerShipState.value.targetX = tx.coerceIn(80f, 1000f)
                         viewModel.playerShipState.value.targetY = ty.coerceIn(200f, 1600f)
-                        // Auto fire toward top while moving
                         viewModel.fireBulletAt(tx, ty - 300f)
                         true
                     }
@@ -311,7 +307,7 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 }
             }
 
-            // Drag target indicator — shows where ship is moving
+            // Drag target indicator
             if (isDragging) {
                 val col = playerShip.currentWeaponColor.composeColor
                 drawCircle(col.copy(alpha = 0.15f), 35f, Offset(lastTouchX, lastTouchY))
