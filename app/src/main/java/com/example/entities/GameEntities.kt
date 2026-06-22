@@ -48,7 +48,7 @@ data class PlayerShip(
         x += (targetX - x) * 12f * deltaTime
         y += (targetY - y) * 12f * deltaTime  // ← ADDED: vertical movement
 
-        // Keep ship within safe play area
+        // Keep ship within safe play area (above nav bar, below top HUD)
         x = x.coerceIn(80f, 1000f)
         y = y.coerceIn(200f, 1600f)
 
