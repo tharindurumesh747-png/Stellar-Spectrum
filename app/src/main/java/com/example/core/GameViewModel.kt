@@ -150,74 +150,67 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         changeScreen(GameScreen.GAMEPLAY)
     }
 
+    // ===== PATCH 1: New triggerWaveSpawn with formations =====
     private fun triggerWaveSpawn(wave: Int) {
         val currentPlay = gameplayState.value
         val isBoss = wave >= currentPlay.totalWaves
-        
         val world = currentPlay.worldIndex
-        val count = 4 + wave * 2
         val dronesList = mutableListOf<EnemyDrone>()
 
         if (isBoss) {
             val bossHp = when (world) {
-                1 -> 50
-                2 -> 100
-                3 -> 120
-                4 -> 150
-                5 -> 200
-                else -> 300
+                1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300
             }
             val firstAura = when (world) {
-                1 -> EnergyColor.RED
-                2 -> EnergyColor.RED
-                3 -> EnergyColor.BLUE
-                4 -> EnergyColor.RED
-                5 -> EnergyColor.PURPLE
-                else -> EnergyColor.RED // Will cycle
+                1 -> EnergyColor.RED; 2 -> EnergyColor.RED; 3 -> EnergyColor.BLUE
+                4 -> EnergyColor.RED; 5 -> EnergyColor.PURPLE; else -> EnergyColor.RED
             }
             dronesList.add(
                 EnemyDrone(
-                    type = EnemyType.BOSS,
-                    x = 540f,
-                    y = -200f, // Drops in smoothly from sky
-                    vx = 0f,
-                    vy = 0f,
-                    hp = bossHp,
-                    maxHp = bossHp,
-                    auraColor = firstAura
+                    type = EnemyType.BOSS, x = 540f, y = -200f, vx = 0f, vy = 0f,
+                    hp = bossHp, maxHp = bossHp, auraColor = firstAura
                 )
             )
         } else {
-            // Spawn drones dynamically by World
-            for (i in 0 until count) {
-                val spawnX = 120f + i * (800f / maxOf(1, count - 1))
-                val spawnY = -50f - (i * 180f)
-                
-                // Select Drone type based on World Index
-                val type = when (world) {
-                    1 -> EnemyType.PULSE
-                    2 -> if (i % 2 == 0) EnemyType.SPLIT else EnemyType.PULSE
-                    3 -> if (i % 3 == 0) EnemyType.WARP else EnemyType.PULSE
-                    4 -> if (i % 3 == 0) EnemyType.PRISM else if (i % 3 == 1) EnemyType.SHIELD else EnemyType.PULSE
-                    else -> EnemyType.values().filter { it != EnemyType.BOSS }.random() // Heavy chaotic worlds
-                }
+            // Pick a random FORMATION per wave instead of always the same row
+            val formation = (0..3).random()
+            val count = 5 + wave * 2
 
-                val aura = if (type == EnemyType.PRISM) EnergyColor.RED else EnergyColor.values().random()
-                val speedY = 160f + wave * 15f
-                val speedX = if (type == EnemyType.SPLIT) 200f else 0f
-                
-                dronesList.add(
-                    EnemyDrone(
-                        type = type,
-                        x = spawnX,
-                        y = spawnY,
-                        vx = speedX,
-                        vy = speedY,
-                        hp = if (type == EnemyType.SHIELD) 3 else 1,
-                        maxHp = if (type == EnemyType.SHIELD) 3 else 1,
-                        auraColor = aura
-                    )
-                )
+            when (formation) {
+                0 -> {
+                    // V-FORMATION
+                    for (i in 0 until count) {
+                        val half = count / 2
+                        val offset = i - half
+                        val spawnX = 540f + offset * 90f
+                        val spawnY = -50f - kotlin.math.abs(offset) * 70f
+                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
+                    }
+                }
+                1 -> {
+                    // STAGGERED ROWS — drops in 2 waves, 1.5s apart visually via y offset
+                    for (i in 0 until count) {
+                        val spawnX = 120f + (i % 5) * 200f
+                        val spawnY = -50f - (i / 5) * 260f
+                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
+                    }
+                }
+                2 -> {
+                    // ZIGZAG DIAGONAL
+                    for (i in 0 until count) {
+                        val spawnX = 120f + (i % 6) * 160f
+                        val spawnY = -50f - i * 90f
+                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
+                    }
+                }
+                else -> {
+                    // RANDOM SCATTER
+                    for (i in 0 until count) {
+                        val spawnX = 100f + kotlin.random.Random.nextFloat() * 880f
+                        val spawnY = -60f - kotlin.random.Random.nextFloat() * 500f
+                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
+                    }
+                }
             }
         }
 
@@ -227,6 +220,32 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             isBossFight = isBoss
         )
     }
+
+    // Helper: builds one drone with type/speed/HP scaled by world + wave
+    private fun makeDrone(world: Int, wave: Int, x: Float, y: Float, i: Int): EnemyDrone {
+        val type = when (world) {
+            1 -> if (i % 4 == 0) EnemyType.WARP else EnemyType.PULSE
+            2 -> if (i % 2 == 0) EnemyType.SPLIT else EnemyType.PULSE
+            3 -> if (i % 3 == 0) EnemyType.WARP else if (i % 3 == 1) EnemyType.PULSE else EnemyType.SPLIT
+            4 -> if (i % 3 == 0) EnemyType.PRISM else if (i % 3 == 1) EnemyType.SHIELD else EnemyType.PULSE
+            else -> EnemyType.values().filter { it != EnemyType.BOSS }.random()
+        }
+        val aura = if (type == EnemyType.PRISM) EnergyColor.RED else EnergyColor.values().random()
+        // Speed scales gently with wave so later waves feel harder, not just busier
+        val speedY = 140f + wave * 12f + (i % 3) * 20f
+        val speedX = when (type) {
+            EnemyType.SPLIT -> 180f
+            EnemyType.PRISM -> 160f
+            else -> 0f
+        }
+        return EnemyDrone(
+            type = type, x = x, y = y, vx = speedX, vy = speedY,
+            hp = if (type == EnemyType.SHIELD) 3 else 1,
+            maxHp = if (type == EnemyType.SHIELD) 3 else 1,
+            auraColor = aura
+        )
+    }
+    // ===== END PATCH 1 =====
 
     // Switch ship energy alignment color
     fun switchWeaponColor(color: EnergyColor) {
@@ -453,21 +472,23 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            // Check if bounds breached bottom limit
+            // ===== PATCH 2: Enemy escape damage (replaced block) =====
             if (enemy.y > 1750f) {
                 if (enemy.type != EnemyType.BOSS) {
                     enemyIter.remove()
-                    // Escape causes player HP strike if unshielded
                     if (!player.isInvincible) {
-                        player.hp = maxOf(0, player.hp - 10)
-                        triggerVibration(getApplication(), 80)
-                        SoundSynth.playHitWrong()
-                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,Color.Red.copy(alpha=0.3f),0.25f))
+                        // Reduced from 10 -> 4, and give a tiny grace window so multiple
+                        // escapes in the same frame don't all land at once
+                        player.hp = maxOf(0, player.hp - 4)
+                        player.invincibilityTimeRemaining = maxOf(player.invincibilityTimeRemaining, 0.15f)
+                        triggerVibration(getApplication(), 60)
+                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,Color.Red.copy(alpha=0.18f),0.2f))
                     }
                 } else {
-                    enemy.y = 200f // bounce back safe
+                    enemy.y = 200f
                 }
             }
+            // ===== END PATCH 2 =====
         }
 
         // Collision Check: Player bullets vs Enemies
