@@ -95,6 +95,11 @@ fun GameplayScreen(viewModel: GameViewModel) {
             .testTag("gameplay_root")
             .background(Color(0xFF030308))
             .pointerInteropFilter { event ->
+                // CRITICAL: don't capture touches when an overlay (game over/victory/pause)
+                // is showing — let them pass through to the Compose buttons on top.
+                if (playState.gameEnded || playState.levelComplete || isPaused) {
+                    return@pointerInteropFilter false
+                }
                 val tx = event.x
                 val ty = event.y
                 when (event.action) {
