@@ -18,19 +18,14 @@ enum class EnergyColor(val index: Int, val title: String, val composeColor: Colo
     }
 }
 
-enum class EnemyType {
-    PULSE, SPLIT, WARP, SHIELD, PRISM, BOSS
-}
-
-enum class PowerUpType {
-    SHIELD, MULTI_SHOT, SLOW_TIME, SCORE_MULT
-}
+enum class EnemyType { PULSE, SPLIT, WARP, SHIELD, PRISM, BOSS }
+enum class PowerUpType { SHIELD, MULTI_SHOT, SLOW_TIME, SCORE_MULT }
 
 data class PlayerShip(
     var x: Float = 500f,
     var y: Float = 1400f,
     var targetX: Float = 500f,
-    var targetY: Float = 1400f,        // ← ADDED: vertical target
+    var targetY: Float = 1400f,
     var maxHp: Int = 100,
     var hp: Int = 100,
     var selectedShipId: String = "solar_wing",
@@ -44,11 +39,8 @@ data class PlayerShip(
     val isInvincible: Boolean get() = invincibilityTimeRemaining > 0f || isShieldActive
 
     fun update(deltaTime: Float, fireCooldownMultiplier: Float) {
-        // Smooth interpolation toward target — both X and Y
         x += (targetX - x) * 12f * deltaTime
-        y += (targetY - y) * 12f * deltaTime  // ← ADDED: vertical movement
-
-        // Keep ship within safe play area (above nav bar, below top HUD)
+        y += (targetY - y) * 12f * deltaTime
         x = x.coerceIn(80f, 1000f)
         y = y.coerceIn(200f, 1600f)
 
@@ -58,7 +50,6 @@ data class PlayerShip(
             val chargeSpeed = if (selectedShipId == "eclipse_runner") 0.08f else 0.04f
             shieldCharge = minOf(1.0f, shieldCharge + chargeSpeed * deltaTime)
         }
-
         if (invincibilityTimeRemaining > 0f) {
             invincibilityTimeRemaining = maxOf(0f, invincibilityTimeRemaining - deltaTime)
         }
@@ -66,35 +57,21 @@ data class PlayerShip(
 }
 
 data class Projectile(
-    var x: Float,
-    var y: Float,
-    var vx: Float,
-    var vy: Float,
-    val color: EnergyColor,
-    val isFromPlayer: Boolean,
-    var hasSplit: Boolean = false,
-    val id: Long = System.nanoTime()
+    var x: Float, var y: Float, var vx: Float, var vy: Float,
+    val color: EnergyColor, val isFromPlayer: Boolean,
+    var hasSplit: Boolean = false, val id: Long = System.nanoTime()
 ) {
-    fun update(deltaTime: Float) {
-        x += vx * deltaTime
-        y += vy * deltaTime
-    }
-
+    fun update(deltaTime: Float) { x += vx * deltaTime; y += vy * deltaTime }
     val isOutOfBounds: Boolean get() = y < -50f || y > 2000f || x < -50f || x > 1150f
 }
 
 data class EnemyDrone(
     val id: Long = System.nanoTime(),
     val type: EnemyType,
-    var x: Float,
-    var y: Float,
-    var vx: Float,
-    var vy: Float,
-    var hp: Int,
-    var maxHp: Int,
-    var auraColor: EnergyColor,
+    var x: Float, var y: Float, var vx: Float, var vy: Float,
+    var hp: Int, var maxHp: Int, var auraColor: EnergyColor,
     var spawnTime: Long = System.currentTimeMillis(),
-    var warpTimer: Float = 2.0f,
+    var warpTimer: Float = 1.6f,
     var rotationAngle: Float = 0f,
     var colorCycleTimer: Float = 1.5f,
     var shieldHitsRemaining: Int = 3,
@@ -118,18 +95,18 @@ data class EnemyDrone(
                 y += vy * deltaTime
             }
             EnemyType.WARP -> {
+                // FIX: always descend at a real pace, teleport is now just a visual
+                // flourish layered on top of steady downward motion — guarantees
+                // the wave eventually clears.
                 warpTimer -= deltaTime
                 if (warpTimer <= 0f) {
-                    warpTimer = 2.0f
+                    warpTimer = 1.6f
                     x = 100f + kotlin.random.Random.nextFloat() * (screenWidth - 200f)
-                    y = 150f + kotlin.random.Random.nextFloat() * 450f
                     SoundSynth.playUiClick()
                 }
-                y += vy * 0.3f * deltaTime
+                y += vy * deltaTime   // FIX: was vy*0.3f — far too slow, now full speed
             }
-            EnemyType.SHIELD -> {
-                y += vy * deltaTime
-            }
+            EnemyType.SHIELD -> { y += vy * deltaTime }
             EnemyType.PRISM -> {
                 x += vx * deltaTime
                 y += vy * deltaTime
@@ -143,18 +120,15 @@ data class EnemyDrone(
             }
             EnemyType.BOSS -> {
                 width = 320f; height = 320f
-                if (y < 350f) {
-                    y += 100f * deltaTime
-                } else {
+                if (y < 350f) { y += 100f * deltaTime }
+                else {
                     val t = (System.currentTimeMillis() - spawnTime).toFloat() / 1000f
                     x = 540f + sin(t * 1.5f) * 350f
                 }
                 val hpRatio = hp.toFloat() / maxHp.toFloat()
                 val targetPhase = when {
-                    hpRatio <= 0.25f -> 4
-                    hpRatio <= 0.5f  -> 3
-                    hpRatio <= 0.75f -> 2
-                    else -> 1
+                    hpRatio <= 0.25f -> 4; hpRatio <= 0.5f -> 3
+                    hpRatio <= 0.75f -> 2; else -> 1
                 }
                 if (targetPhase > bossPhase) {
                     bossPhase = targetPhase
@@ -176,36 +150,20 @@ data class EnemyDrone(
 }
 
 data class PowerUp(
-    val type: PowerUpType,
-    var x: Float,
-    var y: Float,
-    var vy: Float = 250f,
-    val width: Float = 60f,
-    val height: Float = 60f
-) {
-    fun update(deltaTime: Float) { y += vy * deltaTime }
-}
+    val type: PowerUpType, var x: Float, var y: Float, var vy: Float = 250f,
+    val width: Float = 60f, val height: Float = 60f
+) { fun update(deltaTime: Float) { y += vy * deltaTime } }
 
-enum class ParticleType {
-    EXPLOSION, TRAIL, TEXT, SHOCKWAVE, COMBO_FLASH, SCREEN_FLASH
-}
+enum class ParticleType { EXPLOSION, TRAIL, TEXT, SHOCKWAVE, COMBO_FLASH, SCREEN_FLASH }
 
 data class Particle(
-    val type: ParticleType,
-    var x: Float,
-    var y: Float,
-    var vx: Float,
-    var vy: Float,
-    var size: Float,
-    val color: Color,
-    val maxLife: Float,
-    var life: Float = maxLife,
-    val text: String = ""
+    val type: ParticleType, var x: Float, var y: Float, var vx: Float, var vy: Float,
+    var size: Float, val color: Color, val maxLife: Float,
+    var life: Float = maxLife, val text: String = ""
 ) {
     fun update(deltaTime: Float) {
         life = maxOf(0f, life - deltaTime)
-        x += vx * deltaTime
-        y += vy * deltaTime
+        x += vx * deltaTime; y += vy * deltaTime
         if (type == ParticleType.EXPLOSION) { vx *= 0.95f; vy *= 0.95f }
     }
     val runOut: Boolean get() = life <= 0f
