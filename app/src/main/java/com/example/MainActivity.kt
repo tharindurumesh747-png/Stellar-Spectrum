@@ -11,8 +11,10 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.BgmEngine
 import com.example.core.GameScreen
 import com.example.core.GameViewModel
+import com.example.core.SoundSynth
 import com.example.screens.*
 import com.example.ui.theme.MyApplicationTheme
 
@@ -45,5 +47,30 @@ class MainActivity : ComponentActivity() {
       }
     }
   }
-}
 
+  // FIX: stop all audio whenever the app leaves the foreground (Home button,
+  // app switcher, screen off, or the user closing it). Without this the
+  // background music / synth keeps playing even after the app is closed.
+  override fun onPause() {
+    super.onPause()
+    BgmEngine.stop()
+  }
+
+  override fun onStop() {
+    super.onStop()
+    BgmEngine.stop()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    // Resume music only if we're actually on the gameplay screen
+    if (viewModel.activeScreen.value == GameScreen.GAMEPLAY) {
+      BgmEngine.start(viewModel.gameplayState.value.worldIndex)
+    }
+  }
+
+  override fun onDestroy() {
+    super.onDestroy()
+    BgmEngine.stop()
+  }
+}
