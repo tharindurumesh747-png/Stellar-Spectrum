@@ -53,6 +53,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     init {
         val database = AppDatabase.getDatabase(application)
         repository = UserProgressRepository(database.userProgressDao())
+
+        // FIX: guarantee a saved row exists immediately on first launch, so the
+        // very first emission from progressFlow is non-null. This is what was
+        // causing "tap Enter Portal and nothing happens" until Settings was
+        // toggled (which happened to be the only function that saved a row).
+        viewModelScope.launch { repository.ensureInitialized() }
+
         userProgress = repository.progressFlow.stateIn(
             scope = viewModelScope,
             started = SharingStarted.WhileSubscribed(5000),
