@@ -7,8 +7,27 @@ import kotlinx.coroutines.withContext
 class UserProgressRepository(private val dao: UserProgressDao) {
     val progressFlow: Flow<UserProgress?> = dao.getProgressFlow()
 
+    // FIX: previously this returned a throwaway default UserProgress() when no
+    // row existed, WITHOUT saving it — so the database stayed empty and
+    // progressFlow kept emitting null forever (until something else happened
+    // to call updateProgress, e.g. toggling Settings). Now we persist the
+    // default row immediately so it exists from the very first call.
     suspend fun getProgressDirect(): UserProgress = withContext(Dispatchers.IO) {
-        dao.getProgressDirect() ?: UserProgress()
+        val existing = dao.getProgressDirect()
+        if (existing != null) {
+            existing
+        } else {
+            val fresh = UserProgress()
+            dao.saveProgress(fresh)
+            fresh
+        }
+    }
+
+    // FIX: call this once, eagerly, right when the app starts (see
+    // GameViewModel.init) so the very first emission from progressFlow is
+    // already non-null — no more "tap Enter Portal and nothing happens".
+    suspend fun ensureInitialized() = withContext(Dispatchers.IO) {
+        getProgressDirect()
     }
 
     suspend fun updateProgress(progress: UserProgress) = withContext(Dispatchers.IO) {
@@ -67,20 +86,18 @@ class UserProgressRepository(private val dao: UserProgressDao) {
 
     suspend fun completeRun(worldId: Int, score: Int, crystalsEarned: Int, rawEnemies: Int, bosssKilled: Int) = withContext(Dispatchers.IO) {
         val current = getProgressDirect()
-        
-        // Update high scores
+
         val scores = current.getHighScores().toMutableMap()
         val oldHigh = scores[worldId] ?: 0
         if (score > oldHigh) {
             scores[worldId] = score
         }
-        
-        // Increment other statistics
+
         val newRuns = current.totalRuns + 1
         val newEnemies = current.totalEnemiesKilled + rawEnemies
         val newBosses = current.totalBossesKilled + bosssKilled
         val newCrystals = current.crystals + crystalsEarned
-        
+
         updateProgress(
             current.copy(
                 crystals = newCrystals,
@@ -102,6 +119,6 @@ class UserProgressRepository(private val dao: UserProgressDao) {
     }
 
     suspend fun resetAllData() = withContext(Dispatchers.IO) {
-        updateProgress(UserProgress()) // Saves default blank progress
+        updateProgress(UserProgress())
     }
 }
