@@ -27,37 +27,28 @@ enum class GameScreen {
 
 class GameViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: UserProgressRepository
-    
-    // UI Screen state machine
+
     val activeScreen = MutableStateFlow(GameScreen.SPLASH)
-    
-    // Save-state flow from DB
     val userProgress: StateFlow<UserProgress?>
-    
-    // Gameplay states
     val gameplayState = MutableStateFlow(GameplayState())
     val playerShipState = MutableStateFlow(PlayerShip())
-    
-    // Daily reward tracking state
     val dailyRewardAvailable = MutableStateFlow(false)
     val showDailyRewardPopup = MutableStateFlow(false)
-
-    // Leaderboard coming soon status
     val showLeaderboardComingSoon = MutableStateFlow(false)
-    
-    // Sound & Vibration local caches from Settings
+
     var soundEnabled = true
     var musicEnabled = true
     var vibrationEnabled = true
+
+    // Boss appears after this many kills within the run
+    private val killsPerBoss = 20
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = UserProgressRepository(database.userProgressDao())
 
         // FIX: guarantee a saved row exists immediately on first launch, so the
-        // very first emission from progressFlow is non-null. This is what was
-        // causing "tap Enter Portal and nothing happens" until Settings was
-        // toggled (which happened to be the only function that saved a row).
+        // very first emission from progressFlow is non-null.
         viewModelScope.launch { repository.ensureInitialized() }
 
         userProgress = repository.progressFlow.stateIn(
@@ -66,7 +57,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = null
         )
 
-        // Observe progress updates to cache sound/vibe & check daily rewards
         viewModelScope.launch {
             repository.progressFlow.collect { progress ->
                 progress?.let {
@@ -75,30 +65,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     vibrationEnabled = it.vibrationEnabled
                     SoundSynth.setEnabled(soundEnabled)
                     BgmEngine.setEnabled(musicEnabled)
-                    
                     checkDailyRewardStatus(it)
                 }
             }
         }
     }
 
-    // Daily Rewards checks
     private fun checkDailyRewardStatus(progress: UserProgress) {
         val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        val isClaimable = progress.lastDailyReward != todayStr
-        dailyRewardAvailable.value = isClaimable
+        dailyRewardAvailable.value = progress.lastDailyReward != todayStr
     }
 
     fun claimDailyReward() {
         val progress = userProgress.value ?: return
         if (!dailyRewardAvailable.value) return
-
         viewModelScope.launch {
             val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
             val nextDay = (progress.dailyRewardDay % 7) + 1
-            // Escalating reward crystals
-            val rewardCrystals = nextDay * 50 
-            
+            val rewardCrystals = nextDay * 50
             repository.updateProgress(
                 progress.copy(
                     crystals = progress.crystals + rewardCrystals,
@@ -109,183 +93,105 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             dailyRewardAvailable.value = false
             showDailyRewardPopup.value = false
             SoundSynth.playPowerup()
-            
-            // Check Achievements: Unlock milestones
             triggerAchievementProgress("crystals", progress.crystals + rewardCrystals)
         }
     }
 
     fun changeScreen(screen: GameScreen) {
         activeScreen.value = screen
-        
-        // Custom world sound trigger on Screen change
         if (screen == GameScreen.GAMEPLAY) {
-            val selectedWorld = gameplayState.value.worldIndex
-            BgmEngine.start(selectedWorld)
+            BgmEngine.start(gameplayState.value.worldIndex)
         } else {
             BgmEngine.stop()
         }
     }
 
-    // Setup active Level details
     fun selectWorldAndStart(worldIndex: Int) {
         val progress = userProgress.value ?: return
         val worldDef = GameData.worlds.first { it.index == worldIndex }
-        
-        // Instantiate Player parameters
         val shipDef = GameData.ships.first { it.id == progress.selectedShip }
+
         val player = PlayerShip(
-            x = 540f, // Center horizontally
-            y = 1500f,
-            targetX = 540f,
-            maxHp = shipDef.hp,
-            hp = shipDef.hp,
+            x = 540f, y = 1400f, targetX = 540f, targetY = 1400f,
+            maxHp = shipDef.hp, hp = shipDef.hp,
             selectedShipId = shipDef.id
         )
         playerShipState.value = player
-        
-        // Initialize gameplay values
+
         gameplayState.value = GameplayState(
             worldIndex = worldIndex,
             difficultyStars = worldDef.difficulty,
             totalWaves = 5,
             levelComplete = false,
-            gameEnded = false
+            gameEnded = false,
+            spawnTimer = 0.6f,
+            totalKilledThisRun = 0,
+            currentWave = 1,
+            isBossFight = false
         )
 
-        triggerWaveSpawn(1)
         changeScreen(GameScreen.GAMEPLAY)
     }
 
-    // ===== PATCH 1: New triggerWaveSpawn with formations =====
-    private fun triggerWaveSpawn(wave: Int) {
-        val currentPlay = gameplayState.value
-        val isBoss = wave >= currentPlay.totalWaves
-        val world = currentPlay.worldIndex
-        val dronesList = mutableListOf<EnemyDrone>()
-
-        if (isBoss) {
-            val bossHp = when (world) {
-                1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300
-            }
-            val firstAura = when (world) {
-                1 -> EnergyColor.RED; 2 -> EnergyColor.RED; 3 -> EnergyColor.BLUE
-                4 -> EnergyColor.RED; 5 -> EnergyColor.PURPLE; else -> EnergyColor.RED
-            }
-            dronesList.add(
-                EnemyDrone(
-                    type = EnemyType.BOSS, x = 540f, y = -200f, vx = 0f, vy = 0f,
-                    hp = bossHp, maxHp = bossHp, auraColor = firstAura
-                )
-            )
-        } else {
-            // Pick a random FORMATION per wave instead of always the same row
-            val formation = (0..3).random()
-            val count = 5 + wave * 2
-
-            when (formation) {
-                0 -> {
-                    // V-FORMATION
-                    for (i in 0 until count) {
-                        val half = count / 2
-                        val offset = i - half
-                        val spawnX = 540f + offset * 90f
-                        val spawnY = -50f - kotlin.math.abs(offset) * 70f
-                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
-                    }
-                }
-                1 -> {
-                    // STAGGERED ROWS — drops in 2 waves, 1.5s apart visually via y offset
-                    for (i in 0 until count) {
-                        val spawnX = 120f + (i % 5) * 200f
-                        val spawnY = -50f - (i / 5) * 260f
-                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
-                    }
-                }
-                2 -> {
-                    // ZIGZAG DIAGONAL
-                    for (i in 0 until count) {
-                        val spawnX = 120f + (i % 6) * 160f
-                        val spawnY = -50f - i * 90f
-                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
-                    }
-                }
-                else -> {
-                    // RANDOM SCATTER
-                    for (i in 0 until count) {
-                        val spawnX = 100f + kotlin.random.Random.nextFloat() * 880f
-                        val spawnY = -60f - kotlin.random.Random.nextFloat() * 500f
-                        dronesList.add(makeDrone(world, wave, spawnX, spawnY, i))
-                    }
-                }
-            }
-        }
-
-        gameplayState.value = currentPlay.copy(
-            activeEnemies = dronesList,
-            currentWave = wave,
-            isBossFight = isBoss
-        )
-    }
-
-    // Helper: builds one drone with type/speed/HP scaled by world + wave
-    private fun makeDrone(world: Int, wave: Int, x: Float, y: Float, i: Int): EnemyDrone {
+    // ── Spawns exactly ONE enemy at the top of the screen. Called repeatedly
+    // by the continuous spawn timer in updateGame() instead of big batches. ──
+    private fun spawnSingleEnemy(world: Int, wave: Int): EnemyDrone {
+        val roll = (0..99).random()
         val type = when (world) {
-            1 -> if (i % 4 == 0) EnemyType.WARP else EnemyType.PULSE
-            2 -> if (i % 2 == 0) EnemyType.SPLIT else EnemyType.PULSE
-            3 -> if (i % 3 == 0) EnemyType.WARP else if (i % 3 == 1) EnemyType.PULSE else EnemyType.SPLIT
-            4 -> if (i % 3 == 0) EnemyType.PRISM else if (i % 3 == 1) EnemyType.SHIELD else EnemyType.PULSE
+            1 -> if (roll < 20) EnemyType.WARP else EnemyType.PULSE
+            2 -> if (roll < 35) EnemyType.SPLIT else EnemyType.PULSE
+            3 -> when { roll < 25 -> EnemyType.WARP; roll < 50 -> EnemyType.SPLIT; else -> EnemyType.PULSE }
+            4 -> when { roll < 25 -> EnemyType.PRISM; roll < 50 -> EnemyType.SHIELD; else -> EnemyType.PULSE }
             else -> EnemyType.values().filter { it != EnemyType.BOSS }.random()
         }
-        val aura = if (type == EnemyType.PRISM) EnergyColor.RED else EnergyColor.values().random()
-        // Speed scales gently with wave so later waves feel harder, not just busier
-        val speedY = 140f + wave * 12f + (i % 3) * 20f
-        val speedX = when (type) {
-            EnemyType.SPLIT -> 180f
-            EnemyType.PRISM -> 160f
-            else -> 0f
-        }
+        val spawnX = 100f + kotlin.random.Random.nextFloat() * 880f
+        val aura = EnergyColor.random()
+        val speedY = 130f + wave * 14f
+        val speedX = when (type) { EnemyType.SPLIT -> 180f; EnemyType.PRISM -> 160f; else -> 0f }
+
         return EnemyDrone(
-            type = type, x = x, y = y, vx = speedX, vy = speedY,
+            type = type, x = spawnX, y = -60f, vx = speedX, vy = speedY,
             hp = if (type == EnemyType.SHIELD) 3 else 1,
             maxHp = if (type == EnemyType.SHIELD) 3 else 1,
             auraColor = aura
         )
     }
-    // ===== END PATCH 1 =====
 
-    // Switch ship energy alignment color
+    private fun spawnBoss(world: Int): EnemyDrone {
+        val bossHp = when (world) { 1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300 }
+        val aura = when (world) {
+            1 -> EnergyColor.RED; 2 -> EnergyColor.RED; 3 -> EnergyColor.BLUE
+            4 -> EnergyColor.RED; 5 -> EnergyColor.PURPLE; else -> EnergyColor.RED
+        }
+        return EnemyDrone(
+            type = EnemyType.BOSS, x = 540f, y = -200f, vx = 0f, vy = 0f,
+            hp = bossHp, maxHp = bossHp, auraColor = aura
+        )
+    }
+
     fun switchWeaponColor(color: EnergyColor) {
         val player = playerShipState.value
         if (player.currentWeaponColor != color) {
             player.currentWeaponColor = color
             SoundSynth.playUiClick()
-            
-            // Register Mission Progress: Color triggers
             registerMissionProgress(4, 1)
+            playerShipState.value = player
         }
     }
 
-    // Fire bullet from player ship
     fun fireBulletAt(targetTapX: Float, targetTapY: Float) {
         val player = playerShipState.value
         val now = System.currentTimeMillis()
-        
-        // Verify weapon cooldown rate
         val shipDef = GameData.ships.first { it.id == player.selectedShipId }
         val fRate = if (player.selectedShipId == "quantum_falcon") (shipDef.fireRateMs * 0.82f).toLong() else shipDef.fireRateMs
-        
         if (now - player.lastShootTimeMs < fRate) return
         player.lastShootTimeMs = now
 
         val bulletColor = player.currentWeaponColor
         val px = player.x
         val py = player.y - 40f
-
-        val angle = atan2(targetTapY - py, targetTapX - px)
         val speed = 1000f
 
-        // Play corresponding procedural laser sound
         when (bulletColor) {
             EnergyColor.RED -> SoundSynth.playShootRed()
             EnergyColor.BLUE -> SoundSynth.playShootBlue()
@@ -294,56 +200,43 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val list = gameplayState.value.activeBullets.toMutableList()
-
         when (bulletColor) {
-            EnergyColor.RED -> {
-                // Red plasma: straight fast lasers
-                list.add(Projectile(px, py, 0f, -speed * 1.2f, bulletColor, isFromPlayer = true))
-            }
-            EnergyColor.BLUE -> {
-                // Blue Quantum: heavier pulsing piercing laser
-                list.add(Projectile(px, py, 0f, -speed * 0.8f, bulletColor, isFromPlayer = true))
-            }
+            EnergyColor.RED -> list.add(Projectile(px, py, 0f, -speed * 1.2f, bulletColor, true))
+            EnergyColor.BLUE -> list.add(Projectile(px, py, 0f, -speed * 0.8f, bulletColor, true))
             EnergyColor.GREEN -> {
-                // Green Nova: Spread shot 3 directions
-                list.add(Projectile(px, py - 10f, 0f, -speed, bulletColor, isFromPlayer = true))
-                list.add(Projectile(px, py, -220f, -speed * 0.95f, bulletColor, isFromPlayer = true))
-                list.add(Projectile(px, py, 220f, -speed * 0.95f, bulletColor, isFromPlayer = true))
+                list.add(Projectile(px, py - 10f, 0f, -speed, bulletColor, true))
+                list.add(Projectile(px, py, -220f, -speed * 0.95f, bulletColor, true))
+                list.add(Projectile(px, py, 220f, -speed * 0.95f, bulletColor, true))
             }
-            EnergyColor.PURPLE -> {
-                // Purple Void: Homes onto the closest enemy (dx dy drift calculated dynamically in loop)
-                list.add(Projectile(px, py, 0f, -speed * 0.9f, bulletColor, isFromPlayer = true))
-            }
+            EnergyColor.PURPLE -> list.add(Projectile(px, py, 0f, -speed * 0.9f, bulletColor, true))
         }
-        
         gameplayState.value = gameplayState.value.copy(activeBullets = list)
+        playerShipState.value = player
     }
 
-    // Swipe dodge action activates special ghost dodging
     fun triggerSwipeDodge(swipeDirectionLeft: Boolean) {
         val player = playerShipState.value
         val boundsMove = if (swipeDirectionLeft) -250f else 250f
         player.targetX = (player.x + boundsMove).coerceIn(100f, 980f)
-        
         if (player.selectedShipId == "nova_phantom") {
-            // 1s invincibility
             player.invincibilityTimeRemaining = 1.0f
             spawnCustomParticles(player.x, player.y, Color(0xFF10B981), ParticleType.COMBO_FLASH, "GHOST!")
         }
+        playerShipState.value = player
     }
 
-    // Trigger energy shield
     fun activateShield() {
         val player = playerShipState.value
         if (player.shieldCharge >= 1.0f) {
             player.shieldCharge = 0f
-            player.shieldActiveTimeRemaining = 3.0f // 3 seconds immunity
+            player.shieldActiveTimeRemaining = 3.0f
             SoundSynth.playPowerup()
             spawnCustomParticles(player.x, player.y, Color.White, ParticleType.SHOCKWAVE)
+            playerShipState.value = player
         }
     }
 
-    // Update coordinates, spawn stars, check collision triggers
+    // ── MAIN GAME LOOP ────────────────────────────────────────────────
     fun updateGame(deltaTime: Float) {
         val currentPlay = gameplayState.value
         if (currentPlay.gameEnded || currentPlay.levelComplete) return
@@ -351,66 +244,55 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val player = playerShipState.value
         val fireCooldownMultiplier = if (player.selectedShipId == "nebula_wraith") 0.65f else 1.0f
         player.update(deltaTime, fireCooldownMultiplier)
-        
+        // Speed up shield recharge significantly — was 0.04/sec (25s full),
+        // now 0.18/sec (~5.5s full) so it feels responsive.
+        if (player.shieldActiveTimeRemaining <= 0f) {
+            val chargeSpeed = if (player.selectedShipId == "eclipse_runner") 0.30f else 0.18f
+            player.shieldCharge = minOf(1.0f, player.shieldCharge + chargeSpeed * deltaTime)
+        }
+
         val bullets = currentPlay.activeBullets.toMutableList()
         val enemies = currentPlay.activeEnemies.toMutableList()
         val powerups = currentPlay.activePowerUps.toMutableList()
         val particles = currentPlay.activeParticles.toMutableList()
-        
+
         var currentScore = currentPlay.score
         var currentCombo = currentPlay.comboMultiplier
         var comboTimer = maxOf(0f, currentPlay.comboTimerRemaining - deltaTime)
         var crystalsCollected = currentPlay.crystalsCollectedThisRun
-        var rawKilled = 0
-        var bossesKilled = 0
-        var strikes = currentPlay.wrongMatchesCount
+        var totalKilled = currentPlay.totalKilledThisRun
+        var wave = currentPlay.currentWave
+        var bossActive = currentPlay.isBossFight
+        var spawnTimer = currentPlay.spawnTimer - deltaTime
 
-        if (comboTimer <= 0f) {
-            currentCombo = 1 // reset combo multiplier
-        }
+        if (comboTimer <= 0f) currentCombo = 1
 
-        // Particle dynamics fade life
-        val iteratorParticles = particles.iterator()
-        while (iteratorParticles.hasNext()) {
-            val part = iteratorParticles.next()
-            part.update(deltaTime)
-            if (part.runOut) {
-                iteratorParticles.remove()
-            }
-        }
+        // Particle fade
+        val pIter = particles.iterator()
+        while (pIter.hasNext()) { val part = pIter.next(); part.update(deltaTime); if (part.runOut) pIter.remove() }
 
-        // Add standard ship thrust particles
+        // Engine trail
         if ((0..10).random() < 3) {
             val trailColor = when (player.currentWeaponColor) {
-                EnergyColor.RED -> Color(0xFFFF2E63)
-                EnergyColor.BLUE -> Color(0xFF00ADB5)
-                EnergyColor.GREEN -> Color(0xFF10B981)
-                EnergyColor.PURPLE -> Color(0xFFBD00FF)
+                EnergyColor.RED -> Color(0xFFFF2E63); EnergyColor.BLUE -> Color(0xFF00ADB5)
+                EnergyColor.GREEN -> Color(0xFF10B981); EnergyColor.PURPLE -> Color(0xFFBD00FF)
             }
-            val randomXOffset = -20f + kotlin.random.Random.nextFloat() * 40f
-            val randomVx = -40f + kotlin.random.Random.nextFloat() * 80f
-            val randomVy = 150f + kotlin.random.Random.nextFloat() * 150f
-            particles.add(
-                Particle(
-                    type = ParticleType.TRAIL,
-                    x = player.x + randomXOffset,
-                    y = player.y + 35f,
-                    vx = randomVx,
-                    vy = randomVy,
-                    size = (6..12).random().toFloat(),
-                    color = trailColor.copy(alpha = 0.65f),
-                    maxLife = 0.4f
-                )
-            )
+            particles.add(Particle(
+                type = ParticleType.TRAIL,
+                x = player.x + (-20f + kotlin.random.Random.nextFloat() * 40f),
+                y = player.y + 35f,
+                vx = -40f + kotlin.random.Random.nextFloat() * 80f,
+                vy = 150f + kotlin.random.Random.nextFloat() * 150f,
+                size = (6..12).random().toFloat(),
+                color = trailColor.copy(alpha = 0.65f), maxLife = 0.4f
+            ))
         }
 
-        // Update bullets positions
+        // Bullets move
         val bulletIter = bullets.iterator()
         while (bulletIter.hasNext()) {
             val bullet = bulletIter.next()
             bullet.update(deltaTime)
-            
-            // Homing tracking for Purple voids
             if (bullet.color == EnergyColor.PURPLE && bullet.isFromPlayer) {
                 val target = enemies.minByOrNull { sqrt((it.x - bullet.x)*(it.x - bullet.x) + (it.y - bullet.y)*(it.y - bullet.y)) }
                 if (target != null) {
@@ -418,315 +300,179 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     val factor = if (player.selectedShipId == "void_hunter") 12f else 6f
                     bullet.vx += cos(angle) * 800f * factor * deltaTime
                     bullet.vy += sin(angle) * 800f * factor * deltaTime
-                    // Speed lock
                     val mag = sqrt(bullet.vx*bullet.vx + bullet.vy*bullet.vy)
-                    if (mag > 0f) {
-                        bullet.vx = (bullet.vx / mag) * 950f
-                        bullet.vy = (bullet.vy / mag) * 950f
-                    }
+                    if (mag > 0f) { bullet.vx = (bullet.vx/mag)*950f; bullet.vy = (bullet.vy/mag)*950f }
                 }
             }
-            
-            if (bullet.isOutOfBounds) {
-                bulletIter.remove()
-            }
+            if (bullet.isOutOfBounds) bulletIter.remove()
         }
 
-        // Update enemies list mechanics
+        // ── CONTINUOUS SPAWNING ──────────────────────────────────────
+        // Wave is now just a difficulty/display label that rises with kills.
+        wave = (1 + totalKilled / 8).coerceAtMost(6)
+
+        if (!bossActive && totalKilled > 0 && totalKilled % killsPerBoss == 0 && enemies.none { it.type == EnemyType.BOSS }) {
+            enemies.add(spawnBoss(currentPlay.worldIndex))
+            bossActive = true
+        } else if (!bossActive && spawnTimer <= 0f && enemies.size < 8) {
+            enemies.add(spawnSingleEnemy(currentPlay.worldIndex, wave))
+            // Spawns get faster as wave rises — never below 0.45s
+            spawnTimer = (1.5f - wave * 0.16f).coerceAtLeast(0.45f)
+        }
+
+        // Enemy movement + occasional return fire
         val enemyIter = enemies.iterator()
         while (enemyIter.hasNext()) {
             val enemy = enemyIter.next()
             enemy.update(deltaTime, 1080f, player.x, currentPlay.worldIndex)
-            
-            // Enemies firing patterns
+
             if (enemy.type == EnemyType.BOSS) {
                 enemy.bossShootingTimer += deltaTime
-                val shootRate = when (enemy.bossPhase) {
-                    4 -> 0.8f
-                    3 -> 1.2f
-                    2 -> 1.6f
-                    else -> 2.0f
-                }
+                val shootRate = when (enemy.bossPhase) { 4 -> 0.8f; 3 -> 1.2f; 2 -> 1.6f; else -> 2.0f }
                 if (enemy.bossShootingTimer >= shootRate) {
                     enemy.bossShootingTimer = 0f
-                    // Fires color burst
                     val count = if (enemy.bossPhase == 4) 8 else 4
                     for (i in 0 until count) {
                         val ang = (i * (2 * Math.PI / count)) + (System.currentTimeMillis() / 400.0)
-                        bullets.add(
-                            Projectile(
-                                x = enemy.x,
-                                y = enemy.y + 50f,
-                                vx = cos(ang).toFloat() * 350f,
-                                vy = sin(ang).toFloat() * 350f,
-                                color = enemy.auraColor,
-                                isFromPlayer = false
-                            )
-                        )
+                        bullets.add(Projectile(enemy.x, enemy.y + 50f,
+                            cos(ang).toFloat()*350f, sin(ang).toFloat()*350f, enemy.auraColor, false))
                     }
                 }
-            } else if ((0..1000).random() < 3 + currentPlay.currentWave) {
-                // Occasional bullet from normal drones
-                bullets.add(
-                    Projectile(
-                        x = enemy.x,
-                        y = enemy.y + 35f,
-                        vx = 0f,
-                        vy = 400f,
-                        color = enemy.auraColor,
-                        isFromPlayer = false
-                    )
-                )
+            } else if ((0..1000).random() < 2 + wave) {
+                bullets.add(Projectile(enemy.x, enemy.y + 35f, 0f, 380f, enemy.auraColor, false))
             }
 
-            // ===== PATCH 2: Enemy escape damage (replaced block) =====
+            // FIX: HP now ONLY drops when an enemy escapes past the bottom —
+            // no more body-collision damage, no more wrong-color penalty.
             if (enemy.y > 1750f) {
                 if (enemy.type != EnemyType.BOSS) {
                     enemyIter.remove()
                     if (!player.isInvincible) {
-                        // Reduced from 10 -> 4, and give a tiny grace window so multiple
-                        // escapes in the same frame don't all land at once
-                        player.hp = maxOf(0, player.hp - 4)
-                        player.invincibilityTimeRemaining = maxOf(player.invincibilityTimeRemaining, 0.15f)
-                        triggerVibration(getApplication(), 60)
-                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,Color.Red.copy(alpha=0.18f),0.2f))
+                        player.hp = maxOf(0, player.hp - 6)
+                        player.invincibilityTimeRemaining = maxOf(player.invincibilityTimeRemaining, 0.2f)
+                        triggerVibration(getApplication(), 50)
+                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                            Color.Red.copy(alpha=0.18f), 0.2f))
                     }
                 } else {
                     enemy.y = 200f
                 }
             }
-            // ===== END PATCH 2 =====
         }
 
-        // Collision Check: Player bullets vs Enemies
+        // FIX: ANY bullet hitting ANY enemy destroys it — color no longer matters.
         val bIter = bullets.iterator()
         while (bIter.hasNext()) {
             val bullet = bIter.next()
             if (!bullet.isFromPlayer) continue
-
-            val eIter = enemies.iterator()
             var bulletConsumed = false
+            val eIter = enemies.iterator()
             while (eIter.hasNext()) {
                 val enemy = eIter.next()
-                
-                // standard radial bounding box collision estimate
-                val dx = bullet.x - enemy.x
-                val dy = bullet.y - enemy.y
+                val dx = bullet.x - enemy.x; val dy = bullet.y - enemy.y
                 val dist = sqrt(dx*dx + dy*dy)
                 val rangeRadius = if (enemy.type == EnemyType.BOSS) 150f else 50f
-
                 if (dist < rangeRadius) {
-                    // Match check!
-                    if (bullet.color == enemy.auraColor) {
-                        // Success matching!
-                        enemy.hp--
-                        SoundSynth.playHitCorrect()
-                        
-                        // Spawn explosion bursts
-                        for (i in 0..12) {
-                            particles.add(
-                                Particle(
-                                    type = ParticleType.EXPLOSION,
-                                    x = enemy.x,
-                                    y = enemy.y,
-                                    vx = -250f + kotlin.random.Random.nextFloat() * 500f,
-                                    vy = -250f + kotlin.random.Random.nextFloat() * 500f,
-                                    size = (8..22).random().toFloat(),
-                                    color = bullet.color.composeColor,
-                                    maxLife = 0.45f
-                                )
-                            )
-                        }
-
-                        if (enemy.hp <= 0) {
-                            // Enemy destroyed!
-                            eIter.remove()
-                            rawKilled++
-                            
-                            // Color stats milestones
-                            if (bullet.color == EnergyColor.RED) registerMissionProgress(1, 1)
-
-                            // Check special behaviors: SPLIT Drone breaks in halves
-                            if (enemy.type == EnemyType.SPLIT) {
-                                enemies.add(
-                                    EnemyDrone(
-                                        type = EnemyType.PULSE,
-                                        x = enemy.x - 40f,
-                                        y = enemy.y,
-                                        vx = -120f,
-                                        vy = enemy.vy * 1.1f,
-                                        hp = 1,
-                                        maxHp = 1,
-                                        auraColor = enemy.auraColor
-                                    )
-                                )
-                                enemies.add(
-                                    EnemyDrone(
-                                        type = EnemyType.PULSE,
-                                        x = enemy.x + 40f,
-                                        y = enemy.y,
-                                        vx = 120f,
-                                        vy = enemy.vy * 1.1f,
-                                        hp = 1,
-                                        maxHp = 1,
-                                        auraColor = enemy.auraColor
-                                    )
-                                )
-                            } else if (enemy.type == EnemyType.BOSS) {
-                                bossesKilled++
-                                SoundSynth.playBossDie()
-                                viewModelScope.launch { triggerAchievementProgress("boss", 1) }
-                                registerMissionProgress(3, 1)
-                                
-                                // massive reward
-                                crystalsCollected += 200
-                                currentScore += 5000
-                            }
-
-                            // Compute points
-                            val rewardBase = when (enemy.type) {
-                                EnemyType.PULSE -> 100
-                                EnemyType.SPLIT -> 150
-                                EnemyType.WARP -> 200
-                                EnemyType.SHIELD -> 300
-                                EnemyType.PRISM -> 400
-                                EnemyType.BOSS -> 5000
-                            }
-                            
-                            // Scale score with current active combo multiplier
-                            currentScore += rewardBase * currentCombo
-                            crystalsCollected += 2 * currentCombo
-                            
-                            // Advance combo
-                            currentCombo = minOf(5, currentCombo + 1)
-                            comboTimer = 2.5f // 2.5 seconds window link
-                            
-                            viewModelScope.launch { triggerAchievementProgress("combo", currentCombo) }
-                            
-                            // Spark combo flash particle of text
-                            if (currentCombo > 1) {
-                                particles.add(
-                                    Particle(
-                                        type = ParticleType.TEXT,
-                                        x = enemy.x,
-                                        y = enemy.y - 30f,
-                                        vx = 0f,
-                                        vy = -180f,
-                                        size = 32f,
-                                        color = Color(0xFFFBBF24),
-                                        maxLife = 0.55f,
-                                        text = "${currentCombo}x COMBO!"
-                                    )
-                                )
-                            }
-                        }
-                    } else {
-                        // Color mismatch failure! ENERGY BOUNCE STRIKE
-                        strikes++
-                        bulletConsumed = true
-                        
-                        // Shield consumes wrong matches with no damage penalty
-                        if (!player.isInvincible) {
-                            val damageDone = if (player.selectedShipId == "prism_knight") 5 else 15
-                            player.hp = maxOf(0, player.hp - damageDone)
-                            triggerVibration(getApplication(), 95)
-                            SoundSynth.playHitWrong()
-                        }
-                        
-                        // Spawn erratic error sparks
-                        for (i in 0..6) {
-                            particles.add(
-                                Particle(
-                                    type = ParticleType.EXPLOSION,
-                                    x = bullet.x,
-                                    y = bullet.y,
-                                    vx = -200f + kotlin.random.Random.nextFloat() * 400f,
-                                    vy = -200f + kotlin.random.Random.nextFloat() * 400f,
-                                    size = 12f,
-                                    color = Color.Red,
-                                    maxLife = 0.35f
-                                )
-                            )
-                        }
-                        
-                        // Screen flash red damage indicator
-                        particles.add(
-                            Particle(
-                                type = ParticleType.SCREEN_FLASH,
-                                x = 0f, y = 0f, vx = 0f, vy = 0f, size = 0f,
-                                color = Color.Red.copy(alpha = 0.28f),
-                                maxLife = 0.28f
-                            )
-                        )
-                        
-                        // break combo
-                        currentCombo = 1
+                    enemy.hp--
+                    SoundSynth.playHitCorrect()
+                    for (i in 0..12) {
+                        particles.add(Particle(
+                            type = ParticleType.EXPLOSION, x = enemy.x, y = enemy.y,
+                            vx = -250f + kotlin.random.Random.nextFloat()*500f,
+                            vy = -250f + kotlin.random.Random.nextFloat()*500f,
+                            size = (8..22).random().toFloat(),
+                            color = enemy.auraColor.composeColor, maxLife = 0.45f
+                        ))
                     }
-                    
-                    // Consume bullet unless Blue piercing quantum weapon is selected
-                    if (bullet.color != EnergyColor.BLUE || bulletConsumed) {
-                        bulletConsumed = true
-                        break
+                    if (enemy.hp <= 0) {
+                        eIter.remove()
+                        totalKilled++
+
+                        if (enemy.type == EnemyType.SPLIT) {
+                            enemies.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x-40f, y = enemy.y,
+                                vx = -120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
+                            enemies.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x+40f, y = enemy.y,
+                                vx = 120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
+                        } else if (enemy.type == EnemyType.BOSS) {
+                            bossActive = false
+                            SoundSynth.playBossDie()
+                            viewModelScope.launch { triggerAchievementProgress("boss", 1) }
+                            registerMissionProgress(3, 1)
+                            crystalsCollected += 200
+                            currentScore += 5000
+                        }
+
+                        val rewardBase = when (enemy.type) {
+                            EnemyType.PULSE -> 100; EnemyType.SPLIT -> 150; EnemyType.WARP -> 200
+                            EnemyType.SHIELD -> 300; EnemyType.PRISM -> 400; EnemyType.BOSS -> 5000
+                        }
+                        currentScore += rewardBase * currentCombo
+                        crystalsCollected += 2 * currentCombo
+                        currentCombo = minOf(5, currentCombo + 1)
+                        comboTimer = 2.5f
+                        viewModelScope.launch { triggerAchievementProgress("combo", currentCombo) }
+
+                        if (currentCombo > 1) {
+                            particles.add(Particle(type = ParticleType.TEXT, x = enemy.x, y = enemy.y-30f,
+                                vx = 0f, vy = -180f, size = 32f, color = Color(0xFFFBBF24),
+                                maxLife = 0.55f, text = "${currentCombo}x COMBO!"))
+                        }
                     }
+                    bulletConsumed = true
+                    if (bullet.color != EnergyColor.BLUE) break // BLUE pierces through
                 }
             }
-            if (bulletConsumed) {
-                bIter.remove()
-            }
+            if (bulletConsumed && bullet.color != EnergyColor.BLUE) bIter.remove()
         }
 
-        // Collision Check: Enemy bullets/bodies hits Player Ship
+        // Enemy bullets hitting player still apply damage (kept — distinct
+        // from body-collision; this is "getting shot", which stays as a threat)
         val enemyBIter = bullets.iterator()
         while (enemyBIter.hasNext()) {
             val b = enemyBIter.next()
             if (b.isFromPlayer) continue
-
-            val dx = b.x - player.x
-            val dy = b.y - player.y
-            val dist = sqrt(dx*dx + dy*dy)
-            
-            if (dist < 60f) {
+            val dx = b.x - player.x; val dy = b.y - player.y
+            if (sqrt(dx*dx+dy*dy) < 60f) {
                 enemyBIter.remove()
-                // Take hit
                 if (!player.isInvincible) {
-                    player.hp = maxOf(0, player.hp - 12)
-                    triggerVibration(getApplication(), 100)
-                    SoundSynth.playHitWrong()
-                    
-                    particles.add(
-                        Particle(
-                            type = ParticleType.SCREEN_FLASH,
-                            x = 0f, y = 0f, vx = 0f, vy = 0f, size = 0f,
-                            color = Color.Red.copy(alpha = 0.25f),
-                            maxLife = 0.22f
-                        )
-                    )
+                    player.hp = maxOf(0, player.hp - 8)
+                    triggerVibration(getApplication(), 70)
+                    particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                        Color.Red.copy(alpha=0.2f), 0.2f))
                 }
             }
         }
 
-        // Game over conditions
-        if (player.hp <= 0) {
-            SoundSynth.playHitWrong()
-            gameplayState.value = currentPlay.copy(gameEnded = true)
-            saveGameStatsAndEnd(worldIndex = currentPlay.worldIndex, score = currentScore, crystals = crystalsCollected, rawKilled = rawKilled, bossesKilled = bossesKilled, strikes = strikes, complete = false)
-            return
-        }
-
-        // Level Wave Complete transition checks
-        if (enemies.isEmpty()) {
-            val nextWave = currentPlay.currentWave + 1
-            if (nextWave <= currentPlay.totalWaves) {
-                triggerWaveSpawn(nextWave)
-            } else {
-                // Victory! Clear screen
-                gameplayState.value = currentPlay.copy(levelComplete = true)
-                saveGameStatsAndEnd(worldIndex = currentPlay.worldIndex, score = currentScore, crystals = crystalsCollected, rawKilled = rawKilled, bossesKilled = bossesKilled, strikes = strikes, complete = true)
-                return
+        // Powerups
+        val puIter = powerups.iterator()
+        while (puIter.hasNext()) {
+            val pu = puIter.next()
+            pu.update(deltaTime)
+            if (pu.y > 2000f) { puIter.remove(); continue }
+            val dx = pu.x - player.x; val dy = pu.y - player.y
+            if (sqrt(dx*dx+dy*dy) < 60f) {
+                puIter.remove()
+                crystalsCollected += 20
+                SoundSynth.playPowerup()
             }
         }
 
-        // Sync local states back to state flows
+        if (player.hp <= 0) {
+            gameplayState.value = currentPlay.copy(gameEnded = true)
+            playerShipState.value = player
+            saveGameStatsAndEnd(currentPlay.worldIndex, currentScore, crystalsCollected, totalKilled, 0, 0, false)
+            return
+        }
+
+        // Level complete: boss defeated AND no boss currently active AND we just killed one this frame
+        if (!bossActive && currentPlay.isBossFight) {
+            gameplayState.value = currentPlay.copy(levelComplete = true)
+            playerShipState.value = player
+            saveGameStatsAndEnd(currentPlay.worldIndex, currentScore, crystalsCollected, totalKilled, 1, 0, true)
+            return
+        }
+
+        playerShipState.value = player
         gameplayState.value = currentPlay.copy(
             score = currentScore,
             comboMultiplier = currentCombo,
@@ -736,46 +482,27 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             activeEnemies = enemies,
             activePowerUps = powerups,
             activeParticles = particles,
-            wrongMatchesCount = strikes
+            totalKilledThisRun = totalKilled,
+            currentWave = wave,
+            isBossFight = bossActive,
+            spawnTimer = spawnTimer
         )
     }
 
     private fun saveGameStatsAndEnd(worldIndex: Int, score: Int, crystals: Int, rawKilled: Int, bossesKilled: Int, strikes: Int, complete: Boolean) {
         viewModelScope.launch {
             if (complete) {
-                // Unlock and advance next World index progression securely
-                if (worldIndex < 6) {
-                    repository.unlockWorld(worldIndex + 1)
-                }
-                
-                // Clear conditions achievement triggers
-                if (worldIndex == 6) {
-                    triggerAchievementProgress("world", 6)
-                }
-                if (strikes == 0) {
-                    triggerAchievementProgress("hits", 1)
-                    registerMissionProgress(5, 1) // Clean driver
-                }
+                if (worldIndex < 6) repository.unlockWorld(worldIndex + 1)
+                if (worldIndex == 6) triggerAchievementProgress("world", 6)
+                triggerAchievementProgress("hits", 1)
+                registerMissionProgress(5, 1)
             }
-            
-            // Core save DB integration
-            repository.completeRun(
-                worldId = worldIndex,
-                score = score,
-                crystalsEarned = crystals,
-                rawEnemies = rawKilled,
-                bosssKilled = bossesKilled
-            )
-
-            // Mission analytics progress updates
-            registerMissionProgress(2, score) // Score survivor
-            registerMissionProgress(6, rawKilled) // Elite hunter
-            registerMissionProgress(7, score) // Total cosmic score accumulation
-
-            // Unlock Crystal Titan ship definition on World 6 clear
-            if (complete && worldIndex == 6) {
-                unlockSpecialShip("crystal_titan")
-            }
+            repository.completeRun(worldId = worldIndex, score = score, crystalsEarned = crystals,
+                rawEnemies = rawKilled, bosssKilled = bossesKilled)
+            registerMissionProgress(2, score)
+            registerMissionProgress(6, rawKilled)
+            registerMissionProgress(7, score)
+            if (complete && worldIndex == 6) unlockSpecialShip("crystal_titan")
         }
     }
 
@@ -789,41 +516,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // Purchase shop listings using crystal balances
     fun buyShip(shipId: String, cost: Int) {
         viewModelScope.launch {
             val progress = userProgress.value ?: return@launch
             if (progress.crystals >= cost) {
-                val success = repository.unlockShip(shipId, cost)
-                if (success) {
-                    SoundSynth.playPowerup()
-                }
-            } else {
-                SoundSynth.playHitWrong()
-            }
+                if (repository.unlockShip(shipId, cost)) SoundSynth.playPowerup()
+            } else SoundSynth.playHitWrong()
         }
     }
 
-    fun selectShip(shipId: String) {
-        viewModelScope.launch {
-            repository.selectShip(shipId)
-        }
-    }
+    fun selectShip(shipId: String) { viewModelScope.launch { repository.selectShip(shipId) } }
 
     fun toggleSounds(sound: Boolean, music: Boolean, vibration: Boolean) {
-        viewModelScope.launch {
-            repository.updateSettings(sound, music, vibration)
-        }
+        viewModelScope.launch { repository.updateSettings(sound, music, vibration) }
     }
 
     fun resetAllProfileData() {
-        viewModelScope.launch {
-            repository.resetAllData()
-            SoundSynth.playHitWrong()
-        }
+        viewModelScope.launch { repository.resetAllData(); SoundSynth.playHitWrong() }
     }
 
-    // Helper to spin particle shapes on HUD coordinates
     private fun spawnCustomParticles(px: Float, py: Float, col: Color, type: ParticleType, message: String = "") {
         val state = gameplayState.value
         val list = state.activeParticles.toMutableList()
@@ -831,71 +542,48 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         gameplayState.value = state.copy(activeParticles = list)
     }
 
-    // Achievement state check loops
     private suspend fun triggerAchievementProgress(type: String, currentValue: Int) {
         val progress = repository.getProgressDirect()
         val unlocked = progress.getUnlockedAchievements().toMutableList()
-        
         GameData.achievements.forEach { ach ->
             if (!unlocked.contains(ach.id) && ach.type == type && currentValue >= ach.target) {
                 unlocked.add(ach.id)
-                // Award crystals instantly to profile
                 val addedCrystals = progress.crystals + ach.rewardCrystals
-                repository.updateProgress(
-                    progress.copy(
-                        crystals = addedCrystals,
-                        achievementsUnlockedStr = unlocked.joinToString(",")
-                    )
-                )
+                repository.updateProgress(progress.copy(crystals = addedCrystals,
+                    achievementsUnlockedStr = unlocked.joinToString(",")))
                 SoundSynth.playPowerup()
-                
-                // If all achievements unlocked milestone, unlock legendary Omega Specter
-                if (unlocked.size >= GameData.achievements.size - 1) { // Omega lock exception
-                    unlockSpecialShip("omega_specter")
-                }
+                if (unlocked.size >= GameData.achievements.size - 1) unlockSpecialShip("omega_specter")
             }
         }
     }
 
-    // Database tracking mission counts
     private fun registerMissionProgress(missionId: Int, amt: Int) {
         viewModelScope.launch {
             val progress = repository.getProgressDirect()
             val progMap = progress.getMissionsProgress().toMutableMap()
             val originalVal = progMap[missionId] ?: 0
             val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-            
             if (originalVal < targetMission.target) {
                 val newVal = if (missionId == 2) maxOf(originalVal, amt) else originalVal + amt
                 progMap[missionId] = minOf(targetMission.target, newVal)
-                repository.updateProgress(
-                    progress.copy(
-                        missionsProgressStr = UserProgress.buildMissionsProgressStr(progMap)
-                    )
-                )
+                repository.updateProgress(progress.copy(missionsProgressStr = UserProgress.buildMissionsProgressStr(progMap)))
             }
         }
     }
 
-    // Claim crystals rewards for finished missions
     fun claimMissionReward(missionId: Int) {
         viewModelScope.launch {
             val progress = userProgress.value ?: return@launch
             val progressMap = progress.getMissionsProgress()
             val currentProgress = progressMap[missionId] ?: 0
             val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-
             if (currentProgress >= targetMission.target) {
-                // Claim reward! Add crystals and reset mission progress to 0
                 val mutableProgress = progressMap.toMutableMap()
-                mutableProgress[missionId] = 0 // resets after claiming
-                
-                repository.updateProgress(
-                    progress.copy(
-                        crystals = progress.crystals + targetMission.rewardCrystals,
-                        missionsProgressStr = UserProgress.buildMissionsProgressStr(mutableProgress)
-                    )
-                )
+                mutableProgress[missionId] = 0
+                repository.updateProgress(progress.copy(
+                    crystals = progress.crystals + targetMission.rewardCrystals,
+                    missionsProgressStr = UserProgress.buildMissionsProgressStr(mutableProgress)
+                ))
                 SoundSynth.playPowerup()
             }
         }
@@ -918,5 +606,7 @@ data class GameplayState(
     val isBossFight: Boolean = false,
     val gameEnded: Boolean = false,
     val levelComplete: Boolean = false,
-    val wrongMatchesCount: Int = 0
+    val wrongMatchesCount: Int = 0,
+    val spawnTimer: Float = 0.6f,
+    val totalKilledThisRun: Int = 0
 )
