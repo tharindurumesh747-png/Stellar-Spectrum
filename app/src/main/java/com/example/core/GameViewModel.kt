@@ -77,23 +77,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun claimDailyReward() {
-        val progress = userProgress.value ?: return
         if (!dailyRewardAvailable.value) return
         viewModelScope.launch {
-            val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-            val nextDay = (progress.dailyRewardDay % 7) + 1
-            val rewardCrystals = nextDay * 50
-            repository.updateProgress(
+            // FIX: routed through updateAtomic so this can never race against
+            // completeRun() or any other save in flight.
+            val updated = repository.updateAtomic { progress ->
+                val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+                val nextDay = (progress.dailyRewardDay % 7) + 1
+                val rewardCrystals = nextDay * 50
                 progress.copy(
                     crystals = progress.crystals + rewardCrystals,
                     lastDailyReward = todayStr,
                     dailyRewardDay = nextDay
                 )
-            )
+            }
             dailyRewardAvailable.value = false
             showDailyRewardPopup.value = false
             SoundSynth.playPowerup()
-            triggerAchievementProgress("crystals", progress.crystals + rewardCrystals)
+            triggerAchievementProgress("crystals", updated.crystals)
         }
     }
 
@@ -582,13 +583,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun unlockSpecialShip(shipId: String) {
-        val progress = repository.getProgressDirect()
-        val unlockedList = progress.getUnlockedShips().toMutableList()
-        if (!unlockedList.contains(shipId)) {
-            unlockedList.add(shipId)
-            repository.updateProgress(progress.copy(unlockedShipsStr = unlockedList.joinToString(",")))
-            SoundSynth.playPowerup()
+        // FIX: routed through updateAtomic — was an unguarded read-modify-write
+        // that could race against completeRun() and silently lose data.
+        var didUnlock = false
+        repository.updateAtomic { progress ->
+            val unlockedList = progress.getUnlockedShips().toMutableList()
+            if (!unlockedList.contains(shipId)) {
+                unlockedList.add(shipId)
+                didUnlock = true
+                progress.copy(unlockedShipsStr = unlockedList.joinToString(","))
+            } else {
+                progress
+            }
         }
+        if (didUnlock) SoundSynth.playPowerup()
     }
 
     fun buyShip(shipId: String, cost: Int) {
@@ -618,49 +626,80 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun triggerAchievementProgress(type: String, currentValue: Int) {
-        val progress = repository.getProgressDirect()
-        val unlocked = progress.getUnlockedAchievements().toMutableList()
-        GameData.achievements.forEach { ach ->
-            if (!unlocked.contains(ach.id) && ach.type == type && currentValue >= ach.target) {
-                unlocked.add(ach.id)
-                val addedCrystals = progress.crystals + ach.rewardCrystals
-                repository.updateProgress(progress.copy(crystals = addedCrystals,
-                    achievementsUnlockedStr = unlocked.joinToString(",")))
-                SoundSynth.playPowerup()
-                if (unlocked.size >= GameData.achievements.size - 1) unlockSpecialShip("omega_specter")
+        // FIX: routed through updateAtomic — this used to be called on
+        // literally every kill during gameplay (combo/boss checks), each one
+        // an unguarded read-modify-write racing against completeRun()'s high
+        // score save. That race is exactly what caused recorded scores to
+        // intermittently revert to 0 / not update until a later run.
+        var newlyUnlockedCount = 0
+        var totalUnlockedCount = 0
+        repository.updateAtomic { progress ->
+            val unlocked = progress.getUnlockedAchievements().toMutableList()
+            var crystalsToAdd = 0
+            GameData.achievements.forEach { ach ->
+                if (!unlocked.contains(ach.id) && ach.type == type && currentValue >= ach.target) {
+                    unlocked.add(ach.id)
+                    crystalsToAdd += ach.rewardCrystals
+                    newlyUnlockedCount++
+                }
             }
+            totalUnlockedCount = unlocked.size
+            if (crystalsToAdd > 0) {
+                progress.copy(
+                    crystals = progress.crystals + crystalsToAdd,
+                    achievementsUnlockedStr = unlocked.joinToString(",")
+                )
+            } else {
+                progress
+            }
+        }
+        if (newlyUnlockedCount > 0) {
+            SoundSynth.playPowerup()
+            if (totalUnlockedCount >= GameData.achievements.size - 1) unlockSpecialShip("omega_specter")
         }
     }
 
     private fun registerMissionProgress(missionId: Int, amt: Int) {
         viewModelScope.launch {
-            val progress = repository.getProgressDirect()
-            val progMap = progress.getMissionsProgress().toMutableMap()
-            val originalVal = progMap[missionId] ?: 0
+            // FIX: routed through updateAtomic — was an unguarded
+            // read-modify-write, fired on nearly every kill, that could race
+            // against the high-score save and silently overwrite it.
             val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-            if (originalVal < targetMission.target) {
-                val newVal = if (missionId == 2) maxOf(originalVal, amt) else originalVal + amt
-                progMap[missionId] = minOf(targetMission.target, newVal)
-                repository.updateProgress(progress.copy(missionsProgressStr = UserProgress.buildMissionsProgressStr(progMap)))
+            repository.updateAtomic { progress ->
+                val progMap = progress.getMissionsProgress().toMutableMap()
+                val originalVal = progMap[missionId] ?: 0
+                if (originalVal < targetMission.target) {
+                    val newVal = if (missionId == 2) maxOf(originalVal, amt) else originalVal + amt
+                    progMap[missionId] = minOf(targetMission.target, newVal)
+                    progress.copy(missionsProgressStr = UserProgress.buildMissionsProgressStr(progMap))
+                } else {
+                    progress
+                }
             }
         }
     }
 
     fun claimMissionReward(missionId: Int) {
         viewModelScope.launch {
-            val progress = userProgress.value ?: return@launch
-            val progressMap = progress.getMissionsProgress()
-            val currentProgress = progressMap[missionId] ?: 0
+            // FIX: routed through updateAtomic for the same reason as above.
             val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-            if (currentProgress >= targetMission.target) {
-                val mutableProgress = progressMap.toMutableMap()
-                mutableProgress[missionId] = 0
-                repository.updateProgress(progress.copy(
-                    crystals = progress.crystals + targetMission.rewardCrystals,
-                    missionsProgressStr = UserProgress.buildMissionsProgressStr(mutableProgress)
-                ))
-                SoundSynth.playPowerup()
+            var claimed = false
+            repository.updateAtomic { progress ->
+                val progressMap = progress.getMissionsProgress()
+                val currentProgress = progressMap[missionId] ?: 0
+                if (currentProgress >= targetMission.target) {
+                    val mutableProgress = progressMap.toMutableMap()
+                    mutableProgress[missionId] = 0
+                    claimed = true
+                    progress.copy(
+                        crystals = progress.crystals + targetMission.rewardCrystals,
+                        missionsProgressStr = UserProgress.buildMissionsProgressStr(mutableProgress)
+                    )
+                } else {
+                    progress
+                }
             }
+            if (claimed) SoundSynth.playPowerup()
         }
     }
 }
