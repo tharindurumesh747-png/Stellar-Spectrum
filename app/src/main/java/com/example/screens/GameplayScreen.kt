@@ -321,6 +321,10 @@ fun GameplayScreen(viewModel: GameViewModel) {
                             color = Color.White, fontFamily = FontFamily.Monospace)
                         Text("WAVE ${playState.currentWave}  •  KILLS ${playState.totalKilledThisRun}",
                             fontSize = 10.sp, color = Color.LightGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        if (playState.comboMultiplier > 1) {
+                            Text("${playState.comboMultiplier}X COMBO", color = Color(0xFFFBBF24), fontSize = 13.sp,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("💎 ${playState.crystalsCollectedThisRun}", fontSize = 13.sp, fontWeight = FontWeight.Bold,
@@ -420,26 +424,44 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 .background(Color(0xFF0A0A14))
                 .border(width = 1.dp, color = Color.White.copy(alpha = 0.08f))
                 .navigationBarsPadding()
-                .padding(horizontal = 18.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Color wheel — 4 dots in a single row now (simpler, bigger targets)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            // Color wheel — 4 dots, bigger reliable targets
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 ColorDotItem(EnergyColor.RED, playerShip.currentWeaponColor == EnergyColor.RED) { viewModel.switchWeaponColor(EnergyColor.RED) }
                 ColorDotItem(EnergyColor.BLUE, playerShip.currentWeaponColor == EnergyColor.BLUE) { viewModel.switchWeaponColor(EnergyColor.BLUE) }
                 ColorDotItem(EnergyColor.GREEN, playerShip.currentWeaponColor == EnergyColor.GREEN) { viewModel.switchWeaponColor(EnergyColor.GREEN) }
                 ColorDotItem(EnergyColor.PURPLE, playerShip.currentWeaponColor == EnergyColor.PURPLE) { viewModel.switchWeaponColor(EnergyColor.PURPLE) }
             }
 
-            if (playState.comboMultiplier > 1) {
-                Text("${playState.comboMultiplier}X", color = Color(0xFFFBBF24), fontSize = 16.sp,
-                    fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+            // ⚡ ELECTRIC WAVE ultimate — charges from kills, destroys ~50%
+            // of on-screen enemies when full.
+            Box(contentAlignment = Alignment.Center,
+                modifier = Modifier.testTag("ultimate_button").size(56.dp).clip(CircleShape)
+                    .background(Color(0xFF10111F).copy(alpha = 0.95f))
+                    .border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), CircleShape)
+                    .clickable(enabled = playState.ultimateCharge >= 1.0f) { viewModel.activateUltimate() }) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawCircle(Color.Gray.copy(alpha = 0.3f), size.width / 2f - 4f, style = Stroke(width = 4.dp.toPx()))
+                    drawArc(
+                        color = if (playState.ultimateCharge >= 1f) Color(0xFF00E5FF) else Color(0xFFBD00FF),
+                        startAngle = -90f, sweepAngle = playState.ultimateCharge * 360f,
+                        useCenter = false, style = Stroke(width = 4.dp.toPx())
+                    )
+                }
+                Text(
+                    text = if (playState.ultimateCharge >= 1.0f) "⚡" else "${(playState.ultimateCharge*100).toInt()}%",
+                    color = if (playState.ultimateCharge >= 1.0f) Color(0xFF00E5FF) else Color.Gray,
+                    fontSize = if (playState.ultimateCharge >= 1.0f) 20.sp else 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
             // Shield button
             Box(contentAlignment = Alignment.Center,
-                modifier = Modifier.testTag("shield_button").size(64.dp).clip(CircleShape)
+                modifier = Modifier.testTag("shield_button").size(56.dp).clip(CircleShape)
                     .background(Color(0xFF10111F).copy(alpha = 0.95f))
                     .border(1.5.dp, Color.White.copy(alpha = 0.3f), CircleShape)
                     .clickable(enabled = playerShip.shieldCharge >= 1.0f) { viewModel.activateShield() }) {
@@ -454,7 +476,7 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 Text(
                     text = if (playerShip.shieldCharge >= 1.0f) "🛡️" else "${(playerShip.shieldCharge*100).toInt()}%",
                     color = if (playerShip.shieldCharge >= 1.0f) Color.White else Color.Gray,
-                    fontSize = if (playerShip.shieldCharge >= 1.0f) 20.sp else 12.sp,
+                    fontSize = if (playerShip.shieldCharge >= 1.0f) 18.sp else 10.sp,
                     fontWeight = FontWeight.Bold
                 )
             }
