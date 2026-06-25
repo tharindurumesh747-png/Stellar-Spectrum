@@ -46,9 +46,6 @@ data class PlayerShip(
 
         if (shieldActiveTimeRemaining > 0f) {
             shieldActiveTimeRemaining = maxOf(0f, shieldActiveTimeRemaining - deltaTime)
-        } else {
-            val chargeSpeed = if (selectedShipId == "eclipse_runner") 0.08f else 0.04f
-            shieldCharge = minOf(1.0f, shieldCharge + chargeSpeed * deltaTime)
         }
         if (invincibilityTimeRemaining > 0f) {
             invincibilityTimeRemaining = maxOf(0f, invincibilityTimeRemaining - deltaTime)
@@ -78,7 +75,10 @@ data class EnemyDrone(
     var bossShootingTimer: Float = 0f,
     var bossPhase: Int = 1,
     var width: Float = 80f,
-    var height: Float = 80f
+    var height: Float = 80f,
+    // NEW: countdown to the boss's full-screen ultimate attack — only
+    // relevant when type == BOSS. A shielded player absorbs it for free.
+    var ultimateTimer: Float = 7f
 ) {
     fun update(deltaTime: Float, screenWidth: Float, playerX: Float, currentWorld: Int) {
         rotationAngle = (rotationAngle + 120f * deltaTime) % 360f
@@ -95,16 +95,13 @@ data class EnemyDrone(
                 y += vy * deltaTime
             }
             EnemyType.WARP -> {
-                // FIX: always descend at a real pace, teleport is now just a visual
-                // flourish layered on top of steady downward motion — guarantees
-                // the wave eventually clears.
                 warpTimer -= deltaTime
                 if (warpTimer <= 0f) {
                     warpTimer = 1.6f
                     x = 100f + kotlin.random.Random.nextFloat() * (screenWidth - 200f)
                     SoundSynth.playUiClick()
                 }
-                y += vy * deltaTime   // FIX: was vy*0.3f — far too slow, now full speed
+                y += vy * deltaTime
             }
             EnemyType.SHIELD -> { y += vy * deltaTime }
             EnemyType.PRISM -> {
