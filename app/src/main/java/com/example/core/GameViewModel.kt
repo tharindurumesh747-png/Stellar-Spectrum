@@ -20,6 +20,7 @@ import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.ceil
 
 enum class GameScreen {
     SPLASH, MAIN_MENU, SHIP_SELECT, WORLD_SELECT, GAMEPLAY, SHOP, ACHIEVEMENTS, MISSIONS, LEADERBOARD, SETTINGS
@@ -40,15 +41,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     var musicEnabled = true
     var vibrationEnabled = true
 
-    // Boss appears after this many kills within the run
-    private val killsPerBoss = 20
+    // 3x enemy density: boss now appears after 60 kills (was 20), and up to
+    // 20 enemies can be on screen at once (was 8).
+    private val killsPerBoss = 60
+    private val maxConcurrentEnemies = 20
 
     init {
         val database = AppDatabase.getDatabase(application)
         repository = UserProgressRepository(database.userProgressDao())
-
-        // FIX: guarantee a saved row exists immediately on first launch, so the
-        // very first emission from progressFlow is non-null.
         viewModelScope.launch { repository.ensureInitialized() }
 
         userProgress = repository.progressFlow.stateIn(
@@ -127,14 +127,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             spawnTimer = 0.6f,
             totalKilledThisRun = 0,
             currentWave = 1,
-            isBossFight = false
+            isBossFight = false,
+            ultimateCharge = 0f
         )
 
         changeScreen(GameScreen.GAMEPLAY)
     }
 
-    // ── Spawns exactly ONE enemy at the top of the screen. Called repeatedly
-    // by the continuous spawn timer in updateGame() instead of big batches. ──
     private fun spawnSingleEnemy(world: Int, wave: Int): EnemyDrone {
         val roll = (0..99).random()
         val type = when (world) {
@@ -165,17 +164,18 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         return EnemyDrone(
             type = EnemyType.BOSS, x = 540f, y = -200f, vx = 0f, vy = 0f,
-            hp = bossHp, maxHp = bossHp, auraColor = aura
+            hp = bossHp, maxHp = bossHp, auraColor = aura,
+            ultimateTimer = 7f
         )
     }
 
     fun switchWeaponColor(color: EnergyColor) {
         val player = playerShipState.value
         if (player.currentWeaponColor != color) {
-            player.currentWeaponColor = color
+            val updated = player.copy(currentWeaponColor = color)
             SoundSynth.playUiClick()
             registerMissionProgress(4, 1)
-            playerShipState.value = player
+            playerShipState.value = updated
         }
     }
 
@@ -185,7 +185,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val shipDef = GameData.ships.first { it.id == player.selectedShipId }
         val fRate = if (player.selectedShipId == "quantum_falcon") (shipDef.fireRateMs * 0.82f).toLong() else shipDef.fireRateMs
         if (now - player.lastShootTimeMs < fRate) return
-        player.lastShootTimeMs = now
 
         val bulletColor = player.currentWeaponColor
         val px = player.x
@@ -211,29 +210,78 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             EnergyColor.PURPLE -> list.add(Projectile(px, py, 0f, -speed * 0.9f, bulletColor, true))
         }
         gameplayState.value = gameplayState.value.copy(activeBullets = list)
-        playerShipState.value = player
+        // FIX: .copy() guarantees a genuinely new instance so Compose/StateFlow
+        // always detects the change (lastShootTimeMs updated here).
+        playerShipState.value = player.copy(lastShootTimeMs = now)
     }
 
     fun triggerSwipeDodge(swipeDirectionLeft: Boolean) {
         val player = playerShipState.value
         val boundsMove = if (swipeDirectionLeft) -250f else 250f
-        player.targetX = (player.x + boundsMove).coerceIn(100f, 980f)
+        val newTargetX = (player.x + boundsMove).coerceIn(100f, 980f)
+        var updated = player.copy(targetX = newTargetX)
         if (player.selectedShipId == "nova_phantom") {
-            player.invincibilityTimeRemaining = 1.0f
+            updated = updated.copy(invincibilityTimeRemaining = 1.0f)
             spawnCustomParticles(player.x, player.y, Color(0xFF10B981), ParticleType.COMBO_FLASH, "GHOST!")
         }
-        playerShipState.value = player
+        playerShipState.value = updated
     }
 
     fun activateShield() {
         val player = playerShipState.value
         if (player.shieldCharge >= 1.0f) {
-            player.shieldCharge = 0f
-            player.shieldActiveTimeRemaining = 3.0f
             SoundSynth.playPowerup()
             spawnCustomParticles(player.x, player.y, Color.White, ParticleType.SHOCKWAVE)
-            playerShipState.value = player
+            playerShipState.value = player.copy(shieldCharge = 0f, shieldActiveTimeRemaining = 3.0f)
         }
+    }
+
+    // ── ELECTRIC WAVE ULTIMATE ──────────────────────────────────────────
+    // Charges +1/12 per kill. When full, destroys ~50% of on-screen enemies
+    // (non-boss) and deals a heavy chunk of damage to a boss if present.
+    fun activateUltimate() {
+        val currentPlay = gameplayState.value
+        if (currentPlay.ultimateCharge < 1.0f) return
+
+        val enemies = currentPlay.activeEnemies.toMutableList()
+        val particles = currentPlay.activeParticles.toMutableList()
+        val nonBoss = enemies.filter { it.type != EnemyType.BOSS }
+        val killCount = ceil(nonBoss.size * 0.5f).toInt()
+        val toKill = nonBoss.shuffled().take(killCount)
+
+        var bonusScore = 0
+        var bonusCrystals = 0
+        toKill.forEach { e ->
+            enemies.remove(e)
+            bonusScore += 80
+            bonusCrystals += 1
+            for (i in 0..8) {
+                particles.add(Particle(
+                    type = ParticleType.EXPLOSION, x = e.x, y = e.y,
+                    vx = -200f + kotlin.random.Random.nextFloat()*400f,
+                    vy = -200f + kotlin.random.Random.nextFloat()*400f,
+                    size = 16f, color = Color(0xFF00E5FF), maxLife = 0.5f
+                ))
+            }
+        }
+        // Boss takes a big chunk of damage too
+        val boss = enemies.firstOrNull { it.type == EnemyType.BOSS }
+        if (boss != null) {
+            boss.hp = (boss.hp - (boss.maxHp * 0.2f).toInt()).coerceAtLeast(1)
+        }
+
+        // Big screen-wide electric flash
+        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
+            Color(0xFF00E5FF).copy(alpha = 0.5f), 0.4f))
+
+        SoundSynth.playPowerup()
+        gameplayState.value = currentPlay.copy(
+            activeEnemies = enemies,
+            activeParticles = particles,
+            score = currentPlay.score + bonusScore,
+            crystalsCollectedThisRun = currentPlay.crystalsCollectedThisRun + bonusCrystals,
+            ultimateCharge = 0f
+        )
     }
 
     // ── MAIN GAME LOOP ────────────────────────────────────────────────
@@ -241,11 +289,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         val currentPlay = gameplayState.value
         if (currentPlay.gameEnded || currentPlay.levelComplete) return
 
-        val player = playerShipState.value
-        val fireCooldownMultiplier = if (player.selectedShipId == "nebula_wraith") 0.65f else 1.0f
-        player.update(deltaTime, fireCooldownMultiplier)
-        // Speed up shield recharge significantly — was 0.04/sec (25s full),
-        // now 0.18/sec (~5.5s full) so it feels responsive.
+        var player = playerShipState.value
+        player.update(deltaTime, 1.0f)
         if (player.shieldActiveTimeRemaining <= 0f) {
             val chargeSpeed = if (player.selectedShipId == "eclipse_runner") 0.30f else 0.18f
             player.shieldCharge = minOf(1.0f, player.shieldCharge + chargeSpeed * deltaTime)
@@ -253,6 +298,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val bullets = currentPlay.activeBullets.toMutableList()
         val enemies = currentPlay.activeEnemies.toMutableList()
+        // FIX (crash bug): SPLIT enemies used to be added directly into
+        // `enemies` WHILE an iterator over that same list was still active —
+        // this threw ConcurrentModificationException and crashed the app the
+        // moment a piercing BLUE bullet split an enemy mid-loop. New enemies
+        // are now queued here and merged in only AFTER all loops finish.
+        val pendingSpawns = mutableListOf<EnemyDrone>()
         val powerups = currentPlay.activePowerUps.toMutableList()
         val particles = currentPlay.activeParticles.toMutableList()
 
@@ -264,14 +315,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var wave = currentPlay.currentWave
         var bossActive = currentPlay.isBossFight
         var spawnTimer = currentPlay.spawnTimer - deltaTime
+        var ultimateCharge = currentPlay.ultimateCharge
 
         if (comboTimer <= 0f) currentCombo = 1
 
-        // Particle fade
         val pIter = particles.iterator()
         while (pIter.hasNext()) { val part = pIter.next(); part.update(deltaTime); if (part.runOut) pIter.remove() }
 
-        // Engine trail
         if ((0..10).random() < 3) {
             val trailColor = when (player.currentWeaponColor) {
                 EnergyColor.RED -> Color(0xFFFF2E63); EnergyColor.BLUE -> Color(0xFF00ADB5)
@@ -288,7 +338,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             ))
         }
 
-        // Bullets move
         val bulletIter = bullets.iterator()
         while (bulletIter.hasNext()) {
             val bullet = bulletIter.next()
@@ -307,20 +356,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (bullet.isOutOfBounds) bulletIter.remove()
         }
 
-        // ── CONTINUOUS SPAWNING ──────────────────────────────────────
-        // Wave is now just a difficulty/display label that rises with kills.
+        // Continuous spawning — 3x density via killsPerBoss & maxConcurrentEnemies
         wave = (1 + totalKilled / 8).coerceAtMost(6)
 
         if (!bossActive && totalKilled > 0 && totalKilled % killsPerBoss == 0 && enemies.none { it.type == EnemyType.BOSS }) {
             enemies.add(spawnBoss(currentPlay.worldIndex))
             bossActive = true
-        } else if (!bossActive && spawnTimer <= 0f && enemies.size < 8) {
+        } else if (!bossActive && spawnTimer <= 0f && enemies.size < maxConcurrentEnemies) {
             enemies.add(spawnSingleEnemy(currentPlay.worldIndex, wave))
-            // Spawns get faster as wave rises — never below 0.45s
-            spawnTimer = (1.5f - wave * 0.16f).coerceAtLeast(0.45f)
+            spawnTimer = (1.5f - wave * 0.16f).coerceAtLeast(0.4f)
         }
 
-        // Enemy movement + occasional return fire
         val enemyIter = enemies.iterator()
         while (enemyIter.hasNext()) {
             val enemy = enemyIter.next()
@@ -338,12 +384,31 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             cos(ang).toFloat()*350f, sin(ang).toFloat()*350f, enemy.auraColor, false))
                     }
                 }
+
+                // ── BOSS FULL-SCREEN ULTIMATE vs PLAYER SHIELD ──────────
+                // Every ~7-10s the boss unleashes a screen-wide blast. If the
+                // player's shield is active at that moment, it's fully
+                // absorbed (no damage, big cyan flash + ultimate-charge
+                // bonus). Otherwise it deals heavy damage.
+                enemy.ultimateTimer -= deltaTime
+                if (enemy.ultimateTimer <= 0f) {
+                    enemy.ultimateTimer = 8f
+                    if (player.isShieldActive) {
+                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                            Color(0xFF00ADB5).copy(alpha = 0.5f), 0.5f))
+                        ultimateCharge = minOf(1f, ultimateCharge + 0.25f)
+                        SoundSynth.playPowerup()
+                    } else {
+                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                            Color.Red.copy(alpha = 0.45f), 0.45f))
+                        player.hp = maxOf(0, player.hp - 30)
+                        triggerVibration(getApplication(), 150)
+                    }
+                }
             } else if ((0..1000).random() < 2 + wave) {
                 bullets.add(Projectile(enemy.x, enemy.y + 35f, 0f, 380f, enemy.auraColor, false))
             }
 
-            // FIX: HP now ONLY drops when an enemy escapes past the bottom —
-            // no more body-collision damage, no more wrong-color penalty.
             if (enemy.y > 1750f) {
                 if (enemy.type != EnemyType.BOSS) {
                     enemyIter.remove()
@@ -360,7 +425,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // FIX: ANY bullet hitting ANY enemy destroys it — color no longer matters.
+        // Any hit destroys any enemy — color no longer required.
         val bIter = bullets.iterator()
         while (bIter.hasNext()) {
             val bullet = bIter.next()
@@ -387,11 +452,13 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     if (enemy.hp <= 0) {
                         eIter.remove()
                         totalKilled++
+                        ultimateCharge = minOf(1f, ultimateCharge + 1f / 12f)
 
                         if (enemy.type == EnemyType.SPLIT) {
-                            enemies.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x-40f, y = enemy.y,
+                            // FIX: queue instead of adding directly to `enemies`
+                            pendingSpawns.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x-40f, y = enemy.y,
                                 vx = -120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
-                            enemies.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x+40f, y = enemy.y,
+                            pendingSpawns.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x+40f, y = enemy.y,
                                 vx = 120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
                         } else if (enemy.type == EnemyType.BOSS) {
                             bossActive = false
@@ -419,14 +486,15 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     bulletConsumed = true
-                    if (bullet.color != EnergyColor.BLUE) break // BLUE pierces through
+                    if (bullet.color != EnergyColor.BLUE) break
                 }
             }
             if (bulletConsumed && bullet.color != EnergyColor.BLUE) bIter.remove()
         }
 
-        // Enemy bullets hitting player still apply damage (kept — distinct
-        // from body-collision; this is "getting shot", which stays as a threat)
+        // FIX: merge queued SPLIT spawns now that all iteration is finished
+        enemies.addAll(pendingSpawns)
+
         val enemyBIter = bullets.iterator()
         while (enemyBIter.hasNext()) {
             val b = enemyBIter.next()
@@ -443,7 +511,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
-        // Powerups
         val puIter = powerups.iterator()
         while (puIter.hasNext()) {
             val pu = puIter.next()
@@ -457,6 +524,11 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
 
+        // FIX: always reassign via .copy() so the PlayerShip StateFlow
+        // genuinely emits a new value every single frame — this is what was
+        // making the shield arc/charge UI look frozen or inconsistent.
+        player = player.copy()
+
         if (player.hp <= 0) {
             gameplayState.value = currentPlay.copy(gameEnded = true)
             playerShipState.value = player
@@ -464,7 +536,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // Level complete: boss defeated AND no boss currently active AND we just killed one this frame
         if (!bossActive && currentPlay.isBossFight) {
             gameplayState.value = currentPlay.copy(levelComplete = true)
             playerShipState.value = player
@@ -485,7 +556,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             totalKilledThisRun = totalKilled,
             currentWave = wave,
             isBossFight = bossActive,
-            spawnTimer = spawnTimer
+            spawnTimer = spawnTimer,
+            ultimateCharge = ultimateCharge
         )
     }
 
@@ -497,6 +569,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 triggerAchievementProgress("hits", 1)
                 registerMissionProgress(5, 1)
             }
+            // completeRun() internally compares against the saved high score
+            // and only overwrites it if this run's score is higher — true
+            // "best score" semantics, not a running total.
             repository.completeRun(worldId = worldIndex, score = score, crystalsEarned = crystals,
                 rawEnemies = rawKilled, bosssKilled = bossesKilled)
             registerMissionProgress(2, score)
@@ -608,5 +683,6 @@ data class GameplayState(
     val levelComplete: Boolean = false,
     val wrongMatchesCount: Int = 0,
     val spawnTimer: Float = 0.6f,
-    val totalKilledThisRun: Int = 0
+    val totalKilledThisRun: Int = 0,
+    val ultimateCharge: Float = 0f
 )
