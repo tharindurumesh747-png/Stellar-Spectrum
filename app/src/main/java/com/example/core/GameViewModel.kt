@@ -129,7 +129,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             totalKilledThisRun = 0,
             currentWave = 1,
             isBossFight = false,
-            ultimateCharge = 0f
+            ultimateCharge = 0f,
+            shieldBoxesSpawnedCount = 0
         )
 
         changeScreen(GameScreen.GAMEPLAY)
@@ -252,6 +253,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         var bonusScore = 0
         var bonusCrystals = 0
+        val playerNow = playerShipState.value
         toKill.forEach { e ->
             enemies.remove(e)
             bonusScore += 80
@@ -264,6 +266,12 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     size = 16f, color = Color(0xFF00E5FF), maxLife = 0.5f
                 ))
             }
+            // Crackling lightning bolt visual from ship to each destroyed enemy
+            particles.add(Particle(
+                type = ParticleType.LIGHTNING_LINK, x = playerNow.x, y = playerNow.y,
+                vx = 0f, vy = 0f, size = 0f, color = Color(0xFF00E5FF), maxLife = 0.3f,
+                targetX = e.x, targetY = e.y
+            ))
         }
         // Boss takes a big chunk of damage too
         val boss = enemies.firstOrNull { it.type == EnemyType.BOSS }
@@ -368,6 +376,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             spawnTimer = (1.5f - wave * 0.16f).coerceAtLeast(0.4f)
         }
 
+        // ── SHIELD BONUS BOXES ────────────────────────────────────────
+        // 3 boxes spread through the pre-boss phase (at 25%/50%/75% of the
+        // kill count needed to summon the boss) so the player can stock up
+        // on shield charge before the Lightning Strike attacks begin.
+        var shieldBoxesSpawned = currentPlay.shieldBoxesSpawnedCount
+        if (!bossActive) {
+            val killsInCycle = totalKilled % killsPerBoss
+            val nextBoxThreshold = (shieldBoxesSpawned + 1) * (killsPerBoss / 4)
+            if (killsInCycle >= nextBoxThreshold && shieldBoxesSpawned < 3) {
+                powerups.add(PowerUp(
+                    type = PowerUpType.SHIELD,
+                    x = 100f + kotlin.random.Random.nextFloat() * 880f,
+                    y = -40f
+                ))
+                shieldBoxesSpawned++
+            }
+            if (killsInCycle < (killsPerBoss / 4)) shieldBoxesSpawned = 0
+        }
+
         val enemyIter = enemies.iterator()
         while (enemyIter.hasNext()) {
             val enemy = enemyIter.next()
@@ -386,25 +413,49 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
-                // ── BOSS FULL-SCREEN ULTIMATE vs PLAYER SHIELD ──────────
-                // Every ~7-10s the boss unleashes a screen-wide blast. If the
-                // player's shield is active at that moment, it's fully
-                // absorbed (no damage, big cyan flash + ultimate-charge
-                // bonus). Otherwise it deals heavy damage.
-                enemy.ultimateTimer -= deltaTime
-                if (enemy.ultimateTimer <= 0f) {
-                    enemy.ultimateTimer = 8f
-                    if (player.isShieldActive) {
-                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                            Color(0xFF00ADB5).copy(alpha = 0.5f), 0.5f))
-                        ultimateCharge = minOf(1f, ultimateCharge + 0.25f)
-                        SoundSynth.playPowerup()
-                    } else {
-                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                            Color.Red.copy(alpha = 0.45f), 0.45f))
-                        player.hp = maxOf(0, player.hp - 30)
-                        triggerVibration(getApplication(), 150)
+                // ── BOSS LIGHTNING STRIKE ────────────────────────────────
+                // Fires exactly 3 times per fight, triggered the moment the
+                // boss's OWN health crosses 70%, 50%, and 20%. A telegraphed
+                // vertical bolt charges for ~1.3s (giving the player a
+                // window to raise shield) then strikes straight down the
+                // boss's column. Shielded = fully absorbed + ultimate charge
+                // bonus. Unshielded = heavy damage.
+                val hpRatio = enemy.hp.toFloat() / enemy.maxHp.toFloat()
+                if (enemy.lightningState == 0) {
+                    val shouldFire = when {
+                        !enemy.hit70 && hpRatio <= 0.70f -> { enemy.hit70 = true; true }
+                        !enemy.hit50 && hpRatio <= 0.50f -> { enemy.hit50 = true; true }
+                        !enemy.hit20 && hpRatio <= 0.20f -> { enemy.hit20 = true; true }
+                        else -> false
                     }
+                    if (shouldFire) {
+                        enemy.lightningState = 1 // charging / telegraph
+                        enemy.ultimateTimer = 1.3f
+                        SoundSynth.playUiClick()
+                    }
+                } else if (enemy.lightningState == 1) {
+                    enemy.ultimateTimer -= deltaTime
+                    if (enemy.ultimateTimer <= 0f) {
+                        enemy.lightningState = 2 // strike!
+                        enemy.ultimateTimer = 0.35f
+                        val withinColumn = kotlin.math.abs(player.x - enemy.x) < 95f
+                        if (withinColumn) {
+                            if (player.isShieldActive) {
+                                particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                                    Color(0xFF00ADB5).copy(alpha = 0.55f), 0.5f))
+                                ultimateCharge = minOf(1f, ultimateCharge + 0.3f)
+                                SoundSynth.playPowerup()
+                            } else {
+                                particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                                    Color.Red.copy(alpha = 0.5f), 0.45f))
+                                player.hp = maxOf(0, player.hp - 35)
+                                triggerVibration(getApplication(), 180)
+                            }
+                        }
+                    }
+                } else if (enemy.lightningState == 2) {
+                    enemy.ultimateTimer -= deltaTime
+                    if (enemy.ultimateTimer <= 0f) enemy.lightningState = 0
                 }
             } else if ((0..1000).random() < 2 + wave) {
                 bullets.add(Projectile(enemy.x, enemy.y + 35f, 0f, 380f, enemy.auraColor, false))
@@ -450,6 +501,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                             color = enemy.auraColor.composeColor, maxLife = 0.45f
                         ))
                     }
+
+                    // PURPLE Void Bomb: splash-damages any other nearby
+                    // enemy on impact (small AOE), with a purple shockwave.
+                    if (bullet.color == EnergyColor.PURPLE) {
+                        particles.add(Particle(ParticleType.SHOCKWAVE, enemy.x, enemy.y, 0f, 0f, 0f,
+                            Color(0xFFBD00FF), 0.35f))
+                        enemies.forEach { other ->
+                            if (other.id != enemy.id) {
+                                val odx = other.x - enemy.x; val ody = other.y - enemy.y
+                                if (sqrt(odx*odx + ody*ody) < 90f) {
+                                    other.hp--
+                                    for (i in 0..5) {
+                                        particles.add(Particle(
+                                            type = ParticleType.EXPLOSION, x = other.x, y = other.y,
+                                            vx = -150f + kotlin.random.Random.nextFloat()*300f,
+                                            vy = -150f + kotlin.random.Random.nextFloat()*300f,
+                                            size = 10f, color = Color(0xFFBD00FF), maxLife = 0.35f
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if (enemy.hp <= 0) {
                         eIter.remove()
                         totalKilled++
@@ -520,7 +595,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             val dx = pu.x - player.x; val dy = pu.y - player.y
             if (sqrt(dx*dx+dy*dy) < 60f) {
                 puIter.remove()
-                crystalsCollected += 20
+                when (pu.type) {
+                    PowerUpType.SHIELD -> {
+                        player.shieldCharge = 1.0f
+                        particles.add(Particle(ParticleType.SHOCKWAVE, pu.x, pu.y, 0f, 0f, 0f,
+                            Color(0xFF00ADB5), 0.4f))
+                    }
+                    else -> crystalsCollected += 20
+                }
                 SoundSynth.playPowerup()
             }
         }
@@ -558,7 +640,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             currentWave = wave,
             isBossFight = bossActive,
             spawnTimer = spawnTimer,
-            ultimateCharge = ultimateCharge
+            ultimateCharge = ultimateCharge,
+            shieldBoxesSpawnedCount = shieldBoxesSpawned
         )
     }
 
@@ -723,5 +806,6 @@ data class GameplayState(
     val wrongMatchesCount: Int = 0,
     val spawnTimer: Float = 0.6f,
     val totalKilledThisRun: Int = 0,
-    val ultimateCharge: Float = 0f
+    val ultimateCharge: Float = 0f,
+    val shieldBoxesSpawnedCount: Int = 0
 )
