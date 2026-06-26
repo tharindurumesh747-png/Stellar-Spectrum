@@ -76,9 +76,15 @@ data class EnemyDrone(
     var bossPhase: Int = 1,
     var width: Float = 80f,
     var height: Float = 80f,
-    // NEW: countdown to the boss's full-screen ultimate attack — only
-    // relevant when type == BOSS. A shielded player absorbs it for free.
-    var ultimateTimer: Float = 7f
+    // ── BOSS LIGHTNING STRIKE state machine ──────────────────────────
+    // 0 = idle, 1 = charging (telegraph warning), 2 = actively striking
+    var lightningState: Int = 0,
+    // Counts down during charging/firing phases (repurposes the old field)
+    var ultimateTimer: Float = 7f,
+    // Each fires exactly once per boss fight, at that HP% threshold
+    var hit70: Boolean = false,
+    var hit50: Boolean = false,
+    var hit20: Boolean = false
 ) {
     fun update(deltaTime: Float, screenWidth: Float, playerX: Float, currentWorld: Int) {
         rotationAngle = (rotationAngle + 120f * deltaTime) % 360f
@@ -147,16 +153,18 @@ data class EnemyDrone(
 }
 
 data class PowerUp(
-    val type: PowerUpType, var x: Float, var y: Float, var vy: Float = 250f,
-    val width: Float = 60f, val height: Float = 60f
-) { fun update(deltaTime: Float) { y += vy * deltaTime } }
+    val type: PowerUpType, var x: Float, var y: Float, var vy: Float = 220f,
+    val width: Float = 60f, val height: Float = 60f, var angle: Float = 0f
+) { fun update(deltaTime: Float) { y += vy * deltaTime; angle += 90f * deltaTime } }
 
-enum class ParticleType { EXPLOSION, TRAIL, TEXT, SHOCKWAVE, COMBO_FLASH, SCREEN_FLASH }
+enum class ParticleType { EXPLOSION, TRAIL, TEXT, SHOCKWAVE, COMBO_FLASH, SCREEN_FLASH, LIGHTNING_LINK }
 
 data class Particle(
     val type: ParticleType, var x: Float, var y: Float, var vx: Float, var vy: Float,
     var size: Float, val color: Color, val maxLife: Float,
-    var life: Float = maxLife, val text: String = ""
+    var life: Float = maxLife, val text: String = "",
+    // Used only by LIGHTNING_LINK to draw a jagged bolt from (x,y) to (targetX,targetY)
+    var targetX: Float = 0f, var targetY: Float = 0f
 ) {
     fun update(deltaTime: Float) {
         life = maxOf(0f, life - deltaTime)
