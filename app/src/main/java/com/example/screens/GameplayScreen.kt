@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInteropFilter
@@ -234,6 +235,30 @@ fun GameplayScreen(viewModel: GameViewModel) {
                                         val py2 = enemy.y + sin(angle).toFloat()*110f
                                         drawLine(fillCol, Offset(px1, py1), Offset(px2, py2), 3.dp.toPx())
                                     }
+
+                                    // ── LIGHTNING STRIKE telegraph + bolt ──
+                                    if (enemy.lightningState == 1) {
+                                        // Charging: thin flickering warning line down the column
+                                        val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.7f else 0.25f
+                                        drawLine(Color(0xFFFFEE00).copy(alpha = flicker),
+                                            Offset(enemy.x, enemy.y + 110f), Offset(enemy.x, spaceHeight),
+                                            6f)
+                                    } else if (enemy.lightningState == 2) {
+                                        // Striking: thick jagged crackling bolt, bright white core
+                                        val segs = 14
+                                        val path = Path()
+                                        var cx = enemy.x; var cy = enemy.y + 110f
+                                        path.moveTo(cx, cy)
+                                        val segLen = (spaceHeight - cy) / segs
+                                        for (s in 1..segs) {
+                                            cx = enemy.x + (kotlin.random.Random.nextFloat() - 0.5f) * 60f
+                                            cy = enemy.y + 110f + segLen * s
+                                            path.lineTo(cx, cy)
+                                        }
+                                        drawPath(path, Color(0xFFFFEE00).copy(alpha = 0.4f), style = Stroke(width = 22.dp.toPx()))
+                                        drawPath(path, Color(0xFFFFEE00), style = Stroke(width = 10.dp.toPx()))
+                                        drawPath(path, Color.White, style = Stroke(width = 4.dp.toPx()))
+                                    }
                                 }
                             }
                         }
@@ -241,10 +266,45 @@ fun GameplayScreen(viewModel: GameViewModel) {
                         // Bullets
                         playState.activeBullets.forEach { bullet ->
                             val beamColor = bullet.color.composeColor
-                            val beamSize = if (bullet.color == EnergyColor.BLUE) 12f else 6f
-                            drawLine(beamColor.copy(alpha = 0.35f), Offset(bullet.x, bullet.y+15f), Offset(bullet.x, bullet.y-15f), beamSize*2.5f)
-                            drawLine(beamColor, Offset(bullet.x, bullet.y+12f), Offset(bullet.x, bullet.y-12f), beamSize)
-                            drawLine(Color.White, Offset(bullet.x, bullet.y+6f), Offset(bullet.x, bullet.y-6f), beamSize*0.4f)
+                            if (bullet.color == EnergyColor.BLUE) {
+                                // Lightning Pierce: crackling jagged bolt instead of a clean line
+                                val jx1 = bullet.x + (kotlin.random.Random.nextFloat()-0.5f)*10f
+                                val jx2 = bullet.x + (kotlin.random.Random.nextFloat()-0.5f)*10f
+                                val path = Path().apply {
+                                    moveTo(bullet.x, bullet.y + 26f)
+                                    lineTo(jx1, bullet.y + 8f)
+                                    lineTo(jx2, bullet.y - 8f)
+                                    lineTo(bullet.x, bullet.y - 26f)
+                                }
+                                drawPath(path, beamColor.copy(alpha = 0.4f), style = Stroke(width = 14f))
+                                drawPath(path, beamColor, style = Stroke(width = 6f))
+                                drawPath(path, Color.White, style = Stroke(width = 2.5f))
+                            } else if (bullet.color == EnergyColor.PURPLE) {
+                                // Void Bomb: pulsing orb
+                                drawCircle(beamColor.copy(alpha = 0.3f), 16f, Offset(bullet.x, bullet.y))
+                                drawCircle(beamColor, 9f, Offset(bullet.x, bullet.y))
+                                drawCircle(Color.White, 4f, Offset(bullet.x, bullet.y))
+                            } else {
+                                val beamSize = 6f
+                                drawLine(beamColor.copy(alpha = 0.35f), Offset(bullet.x, bullet.y+15f), Offset(bullet.x, bullet.y-15f), beamSize*2.5f)
+                                drawLine(beamColor, Offset(bullet.x, bullet.y+12f), Offset(bullet.x, bullet.y-12f), beamSize)
+                                drawLine(Color.White, Offset(bullet.x, bullet.y+6f), Offset(bullet.x, bullet.y-6f), beamSize*0.4f)
+                            }
+                        }
+
+                        // Shield bonus boxes
+                        playState.activePowerUps.forEach { pu ->
+                            val pulse = (sin(System.currentTimeMillis() % 1000 / 1000f * 2 * Math.PI).toFloat() * 0.15f + 0.85f)
+                            rotate(pu.angle, Offset(pu.x, pu.y)) {
+                                drawRect(Color(0xFF00ADB5).copy(alpha = 0.25f * pulse),
+                                    Offset(pu.x - 24f, pu.y - 24f), Size(48f, 48f))
+                                drawRect(Color(0xFF00ADB5), Offset(pu.x - 24f, pu.y - 24f), Size(48f, 48f),
+                                    style = Stroke(width = 3.dp.toPx()))
+                            }
+                            drawContext.canvas.nativeCanvas.drawText("🛡", pu.x, pu.y + 10f,
+                                android.graphics.Paint().apply {
+                                    textSize = 30f; textAlign = android.graphics.Paint.Align.CENTER
+                                })
                         }
 
                         // Player ship
@@ -276,6 +336,19 @@ fun GameplayScreen(viewModel: GameViewModel) {
                                 }
                                 ParticleType.SCREEN_FLASH -> drawRect(
                                     part.color.copy(alpha=(part.life/part.maxLife)*0.3f), size = Size(spaceWidth, spaceHeight))
+                                ParticleType.LIGHTNING_LINK -> {
+                                    val a = (part.life / part.maxLife).coerceIn(0f, 1f)
+                                    val midX = (part.x + part.targetX) / 2f + (kotlin.random.Random.nextFloat()-0.5f)*30f
+                                    val midY = (part.y + part.targetY) / 2f + (kotlin.random.Random.nextFloat()-0.5f)*30f
+                                    val path = Path().apply {
+                                        moveTo(part.x, part.y)
+                                        lineTo(midX, midY)
+                                        lineTo(part.targetX, part.targetY)
+                                    }
+                                    drawPath(path, part.color.copy(alpha = a * 0.4f), style = Stroke(width = 14f))
+                                    drawPath(path, part.color.copy(alpha = a), style = Stroke(width = 5f))
+                                    drawPath(path, Color.White.copy(alpha = a), style = Stroke(width = 2f))
+                                }
                                 else -> drawContext.canvas.nativeCanvas.apply {
                                     val paint = android.graphics.Paint().apply {
                                         color = android.graphics.Color.YELLOW; textSize = part.size
