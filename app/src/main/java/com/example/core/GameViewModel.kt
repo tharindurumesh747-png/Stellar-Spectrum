@@ -291,17 +291,6 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             boss.hp = (boss.hp - (boss.maxHp * 0.2f).toInt()).coerceAtLeast(1)
         }
 
-        // ── SHIP'S ELECTRIC WAVE BEAM ────────────────────────────────────
-        // One vertical bolt, blue-mixed, straight up from the ship to the
-        // top of the screen — mirrors the boss's vertical strike but in the
-        // opposite direction and color, so it's instantly clear whose
-        // attack is which.
-        particles.add(Particle(
-            type = ParticleType.LIGHTNING_LINK, x = playerNow.x, y = playerNow.y,
-            vx = 0f, vy = 0f, size = 0f, color = Color(0xFF00BFFF), maxLife = 0.45f,
-            targetX = playerNow.x, targetY = 0f
-        ))
-
         // Big screen-wide electric flash
         particles.add(Particle(ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
             Color(0xFF00BFFF).copy(alpha = 0.5f), 0.4f))
@@ -312,7 +301,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             activeParticles = particles,
             score = currentPlay.score + bonusScore,
             crystalsCollectedThisRun = currentPlay.crystalsCollectedThisRun + bonusCrystals,
-            ultimateCharge = 0f
+            ultimateCharge = 0f,
+            // FIX: dedicated unscaled-render timer instead of a particle —
+            // see GameplayScreen's separate beam-overlay Canvas.
+            ultimateBeamTimer = 0.45f
         )
     }
 
@@ -348,6 +340,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         var bossActive = currentPlay.isBossFight
         var spawnTimer = currentPlay.spawnTimer - deltaTime
         var ultimateCharge = currentPlay.ultimateCharge
+        val ultimateBeamTimer = maxOf(0f, currentPlay.ultimateBeamTimer - deltaTime)
 
         if (comboTimer <= 0f) currentCombo = 1
 
@@ -677,7 +670,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             isBossFight = bossActive,
             spawnTimer = spawnTimer,
             ultimateCharge = ultimateCharge,
-            shieldBoxesSpawnedCount = shieldBoxesSpawned
+            shieldBoxesSpawnedCount = shieldBoxesSpawned,
+            ultimateBeamTimer = ultimateBeamTimer
         )
     }
 
@@ -843,5 +837,10 @@ data class GameplayState(
     val spawnTimer: Float = 0.6f,
     val totalKilledThisRun: Int = 0,
     val ultimateCharge: Float = 0f,
-    val shieldBoxesSpawnedCount: Int = 0
+    val shieldBoxesSpawnedCount: Int = 0,
+    // FIX: drives a dedicated, unscaled beam render in GameplayScreen
+    // (see ultimateBeamTimer usage there) — avoids the old approach of
+    // drawing the beam inside the non-uniform virtual->real scale
+    // transform, which could visually distort/squash a vertical bolt.
+    val ultimateBeamTimer: Float = 0f
 )
