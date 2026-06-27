@@ -231,10 +231,25 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun activateShield() {
         val player = playerShipState.value
-        if (player.shieldCharge >= 1.0f) {
+        val canActivate = player.shieldStock > 0 || player.shieldCharge >= 1.0f
+        if (canActivate) {
             SoundSynth.playPowerup()
             spawnCustomParticles(player.x, player.y, Color.White, ParticleType.SHOCKWAVE)
-            playerShipState.value = player.copy(shieldCharge = 0f, shieldActiveTimeRemaining = 3.0f)
+            // FIX: consume a stacked bonus charge first (icon + number badge
+            // stays visible, count just decreases). Only fall back to
+            // resetting the passively-regenerating base charge once all
+            // stacked bonus charges are used up.
+            if (player.shieldStock > 0) {
+                playerShipState.value = player.copy(
+                    shieldStock = player.shieldStock - 1,
+                    shieldActiveTimeRemaining = 3.0f
+                )
+            } else {
+                playerShipState.value = player.copy(
+                    shieldCharge = 0f,
+                    shieldActiveTimeRemaining = 3.0f
+                )
+            }
         }
     }
 
@@ -247,13 +262,16 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
         val enemies = currentPlay.activeEnemies.toMutableList()
         val particles = currentPlay.activeParticles.toMutableList()
+        val playerNow = playerShipState.value
         val nonBoss = enemies.filter { it.type != EnemyType.BOSS }
         val killCount = ceil(nonBoss.size * 0.5f).toInt()
-        val toKill = nonBoss.shuffled().take(killCount)
+        // FIX: a single vertical beam shoots straight up from the ship.
+        // It hits whichever enemies are closest to the ship's column —
+        // not a random scatter — so positioning under a cluster matters.
+        val toKill = nonBoss.sortedBy { kotlin.math.abs(it.x - playerNow.x) }.take(killCount)
 
         var bonusScore = 0
         var bonusCrystals = 0
-        val playerNow = playerShipState.value
         toKill.forEach { e ->
             enemies.remove(e)
             bonusScore += 80
@@ -263,15 +281,9 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     type = ParticleType.EXPLOSION, x = e.x, y = e.y,
                     vx = -200f + kotlin.random.Random.nextFloat()*400f,
                     vy = -200f + kotlin.random.Random.nextFloat()*400f,
-                    size = 16f, color = Color(0xFF00E5FF), maxLife = 0.5f
+                    size = 16f, color = Color(0xFF00BFFF), maxLife = 0.5f
                 ))
             }
-            // Crackling lightning bolt visual from ship to each destroyed enemy
-            particles.add(Particle(
-                type = ParticleType.LIGHTNING_LINK, x = playerNow.x, y = playerNow.y,
-                vx = 0f, vy = 0f, size = 0f, color = Color(0xFF00E5FF), maxLife = 0.3f,
-                targetX = e.x, targetY = e.y
-            ))
         }
         // Boss takes a big chunk of damage too
         val boss = enemies.firstOrNull { it.type == EnemyType.BOSS }
@@ -279,9 +291,20 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             boss.hp = (boss.hp - (boss.maxHp * 0.2f).toInt()).coerceAtLeast(1)
         }
 
+        // ── SHIP'S ELECTRIC WAVE BEAM ────────────────────────────────────
+        // One vertical bolt, blue-mixed, straight up from the ship to the
+        // top of the screen — mirrors the boss's vertical strike but in the
+        // opposite direction and color, so it's instantly clear whose
+        // attack is which.
+        particles.add(Particle(
+            type = ParticleType.LIGHTNING_LINK, x = playerNow.x, y = playerNow.y,
+            vx = 0f, vy = 0f, size = 0f, color = Color(0xFF00BFFF), maxLife = 0.45f,
+            targetX = playerNow.x, targetY = 0f
+        ))
+
         // Big screen-wide electric flash
         particles.add(Particle(ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
-            Color(0xFF00E5FF).copy(alpha = 0.5f), 0.4f))
+            Color(0xFF00BFFF).copy(alpha = 0.5f), 0.4f))
 
         SoundSynth.playPowerup()
         gameplayState.value = currentPlay.copy(
@@ -431,14 +454,24 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                     if (shouldFire) {
                         enemy.lightningState = 1 // charging / telegraph
                         enemy.ultimateTimer = 1.3f
+                        enemy.lightningTargetX = player.x
                         SoundSynth.playUiClick()
                     }
                 } else if (enemy.lightningState == 1) {
                     enemy.ultimateTimer -= deltaTime
+                    // FIX: continuously re-lock onto the player's CURRENT x
+                    // every frame while charging. This is the actual fix for
+                    // "it should be vertical and inescapable" — previously
+                    // the column was anchored to the boss's own x, so simply
+                    // walking away during the charge dodged it for free.
+                    // Now wherever the ship goes, the bolt follows; only the
+                    // shield can stop it.
+                    enemy.lightningTargetX = player.x
                     if (enemy.ultimateTimer <= 0f) {
                         enemy.lightningState = 2 // strike!
                         enemy.ultimateTimer = 0.35f
-                        val withinColumn = kotlin.math.abs(player.x - enemy.x) < 95f
+                        // Target frozen at the exact instant of impact
+                        val withinColumn = kotlin.math.abs(player.x - enemy.lightningTargetX) < 95f
                         if (withinColumn) {
                             if (player.isShieldActive) {
                                 particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
@@ -597,7 +630,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 puIter.remove()
                 when (pu.type) {
                     PowerUpType.SHIELD -> {
-                        player.shieldCharge = 1.0f
+                        // FIX: additive stock instead of force-filling the
+                        // regen bar — base passive regen is untouched, this
+                        // just stacks an extra ready-to-use charge on top.
+                        player.shieldStock += 1
                         particles.add(Particle(ParticleType.SHOCKWAVE, pu.x, pu.y, 0f, 0f, 0f,
                             Color(0xFF00ADB5), 0.4f))
                     }
