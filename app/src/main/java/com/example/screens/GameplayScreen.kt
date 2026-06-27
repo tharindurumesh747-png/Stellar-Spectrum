@@ -237,26 +237,33 @@ fun GameplayScreen(viewModel: GameViewModel) {
                                     }
 
                                     // ── LIGHTNING STRIKE telegraph + bolt ──
+                                    // Vertical (top-to-bottom), anchored to
+                                    // the PLAYER's tracked x position (not
+                                    // the boss's own x) — red-mixed electric
+                                    // look so it's unmistakably "boss attack".
                                     if (enemy.lightningState == 1) {
-                                        // Charging: thin flickering warning line down the column
-                                        val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.7f else 0.25f
-                                        drawLine(Color(0xFFFFEE00).copy(alpha = flicker),
-                                            Offset(enemy.x, enemy.y + 110f), Offset(enemy.x, spaceHeight),
-                                            6f)
+                                        val tx = enemy.lightningTargetX
+                                        val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.75f else 0.3f
+                                        drawLine(Color(0xFFFF3344).copy(alpha = flicker),
+                                            Offset(tx, enemy.y + 110f), Offset(tx, spaceHeight),
+                                            7f)
+                                        // Small warning marker at the bottom showing exactly where it'll land
+                                        drawCircle(Color(0xFFFF3344).copy(alpha = flicker), 22f, Offset(tx, spaceHeight - 40f))
                                     } else if (enemy.lightningState == 2) {
-                                        // Striking: thick jagged crackling bolt, bright white core
+                                        val tx = enemy.lightningTargetX
                                         val segs = 14
                                         val path = Path()
-                                        var cx = enemy.x; var cy = enemy.y + 110f
+                                        var cx = tx; var cy = enemy.y + 110f
                                         path.moveTo(cx, cy)
                                         val segLen = (spaceHeight - cy) / segs
                                         for (s in 1..segs) {
-                                            cx = enemy.x + (kotlin.random.Random.nextFloat() - 0.5f) * 60f
+                                            cx = tx + (kotlin.random.Random.nextFloat() - 0.5f) * 60f
                                             cy = enemy.y + 110f + segLen * s
                                             path.lineTo(cx, cy)
                                         }
-                                        drawPath(path, Color(0xFFFFEE00).copy(alpha = 0.4f), style = Stroke(width = 22.dp.toPx()))
-                                        drawPath(path, Color(0xFFFFEE00), style = Stroke(width = 10.dp.toPx()))
+                                        // Red-mixed: outer red glow, mid orange, white-hot core
+                                        drawPath(path, Color(0xFFFF3344).copy(alpha = 0.45f), style = Stroke(width = 24.dp.toPx()))
+                                        drawPath(path, Color(0xFFFF6600), style = Stroke(width = 11.dp.toPx()))
                                         drawPath(path, Color.White, style = Stroke(width = 4.dp.toPx()))
                                     }
                                 }
@@ -532,26 +539,37 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 )
             }
 
-            // Shield button
-            Box(contentAlignment = Alignment.Center,
-                modifier = Modifier.testTag("shield_button").size(56.dp).clip(CircleShape)
-                    .background(Color(0xFF10111F).copy(alpha = 0.95f))
-                    .border(1.5.dp, Color.White.copy(alpha = 0.3f), CircleShape)
-                    .clickable(enabled = playerShip.shieldCharge >= 1.0f) { viewModel.activateShield() }) {
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawCircle(Color.Gray.copy(alpha = 0.3f), size.width / 2f - 4f, style = Stroke(width = 4.dp.toPx()))
-                    drawArc(
-                        color = if (playerShip.shieldCharge >= 1f) Color(0xFF00ADB5) else Color(0xFFFF2E63),
-                        startAngle = -90f, sweepAngle = playerShip.shieldCharge * 360f,
-                        useCenter = false, style = Stroke(width = 4.dp.toPx())
-                    )
+            // Shield button — icon always stays once ready; a number badge
+            // above it shows total stacked charges (2, 3, 4...) collected
+            // from bonus boxes. Only the count changes; the icon never
+            // disappears once you have at least one charge ready.
+            run {
+                val baseReady = playerShip.shieldCharge >= 1.0f
+                val totalCharges = playerShip.shieldStock + (if (baseReady) 1 else 0)
+                Box(contentAlignment = Alignment.Center,
+                    modifier = Modifier.testTag("shield_button").size(56.dp).clip(CircleShape)
+                        .background(Color(0xFF10111F).copy(alpha = 0.95f))
+                        .border(1.5.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                        .clickable(enabled = totalCharges >= 1) { viewModel.activateShield() }) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(Color.Gray.copy(alpha = 0.3f), size.width / 2f - 4f, style = Stroke(width = 4.dp.toPx()))
+                        drawArc(
+                            color = if (totalCharges >= 1) Color(0xFF00ADB5) else Color(0xFFFF2E63),
+                            startAngle = -90f, sweepAngle = playerShip.shieldCharge.coerceIn(0f,1f) * 360f,
+                            useCenter = false, style = Stroke(width = 4.dp.toPx())
+                        )
+                    }
+                    if (totalCharges >= 1) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            if (totalCharges >= 2) {
+                                Text("$totalCharges", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                            Text("🛡️", fontSize = 16.sp)
+                        }
+                    } else {
+                        Text("${(playerShip.shieldCharge*100).toInt()}%", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
-                Text(
-                    text = if (playerShip.shieldCharge >= 1.0f) "🛡️" else "${(playerShip.shieldCharge*100).toInt()}%",
-                    color = if (playerShip.shieldCharge >= 1.0f) Color.White else Color.Gray,
-                    fontSize = if (playerShip.shieldCharge >= 1.0f) 18.sp else 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
             }
         }
     }
