@@ -33,7 +33,10 @@ data class PlayerShip(
     var shieldCharge: Float = 0.5f,
     var shieldActiveTimeRemaining: Float = 0f,
     var lastShootTimeMs: Long = 0,
-    var invincibilityTimeRemaining: Float = 0f
+    var invincibilityTimeRemaining: Float = 0f,
+    // Extra stacked shield uses collected from bonus boxes — consumed
+    // before falling back to the passively-regenerating base charge.
+    var shieldStock: Int = 0
 ) {
     val isShieldActive: Boolean get() = shieldActiveTimeRemaining > 0f
     val isInvincible: Boolean get() = invincibilityTimeRemaining > 0f || isShieldActive
@@ -84,7 +87,11 @@ data class EnemyDrone(
     // Each fires exactly once per boss fight, at that HP% threshold
     var hit70: Boolean = false,
     var hit50: Boolean = false,
-    var hit20: Boolean = false
+    var hit20: Boolean = false,
+    // Locks onto the PLAYER's x position (not the boss's own x) so the
+    // strike tracks the ship and cannot be dodged by moving sideways —
+    // only the shield can block it.
+    var lightningTargetX: Float = 0f
 ) {
     fun update(deltaTime: Float, screenWidth: Float, playerX: Float, currentWorld: Int) {
         rotationAngle = (rotationAngle + 120f * deltaTime) % 360f
