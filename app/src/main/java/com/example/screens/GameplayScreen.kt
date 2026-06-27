@@ -236,36 +236,10 @@ fun GameplayScreen(viewModel: GameViewModel) {
                                         drawLine(fillCol, Offset(px1, py1), Offset(px2, py2), 3.dp.toPx())
                                     }
 
-                                    // ── LIGHTNING STRIKE telegraph + bolt ──
-                                    // Vertical (top-to-bottom), anchored to
-                                    // the PLAYER's tracked x position (not
-                                    // the boss's own x) — red-mixed electric
-                                    // look so it's unmistakably "boss attack".
-                                    if (enemy.lightningState == 1) {
-                                        val tx = enemy.lightningTargetX
-                                        val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.75f else 0.3f
-                                        drawLine(Color(0xFFFF3344).copy(alpha = flicker),
-                                            Offset(tx, enemy.y + 110f), Offset(tx, spaceHeight),
-                                            7f)
-                                        // Small warning marker at the bottom showing exactly where it'll land
-                                        drawCircle(Color(0xFFFF3344).copy(alpha = flicker), 22f, Offset(tx, spaceHeight - 40f))
-                                    } else if (enemy.lightningState == 2) {
-                                        val tx = enemy.lightningTargetX
-                                        val segs = 14
-                                        val path = Path()
-                                        var cx = tx; var cy = enemy.y + 110f
-                                        path.moveTo(cx, cy)
-                                        val segLen = (spaceHeight - cy) / segs
-                                        for (s in 1..segs) {
-                                            cx = tx + (kotlin.random.Random.nextFloat() - 0.5f) * 60f
-                                            cy = enemy.y + 110f + segLen * s
-                                            path.lineTo(cx, cy)
-                                        }
-                                        // Red-mixed: outer red glow, mid orange, white-hot core
-                                        drawPath(path, Color(0xFFFF3344).copy(alpha = 0.45f), style = Stroke(width = 24.dp.toPx()))
-                                        drawPath(path, Color(0xFFFF6600), style = Stroke(width = 11.dp.toPx()))
-                                        drawPath(path, Color.White, style = Stroke(width = 4.dp.toPx()))
-                                    }
+                                    // NOTE: the Lightning Strike bolt itself is no
+                                    // longer drawn here — see the dedicated unscaled
+                                    // BeamOverlayCanvas below, which avoids distortion
+                                    // from this block's non-uniform scale() transform.
                                 }
                             }
                         }
@@ -372,6 +346,77 @@ fun GameplayScreen(viewModel: GameViewModel) {
                             drawCircle(col.copy(alpha = 0.15f), 35f, Offset(lastTouchX, lastTouchY))
                             drawCircle(col.copy(alpha = 0.4f), 35f, Offset(lastTouchX, lastTouchY), style = Stroke(width = 2f))
                         }
+                    }
+                }
+
+                // ════════════ DEDICATED UNSCALED BEAM OVERLAY ════════════
+                // Both the boss's Lightning Strike and the ship's Electric
+                // Wave ultimate are drawn here, on a plain Canvas with NO
+                // scale() transform applied. Virtual-space coordinates are
+                // converted to real screen pixels manually (multiplying by
+                // scaleX/scaleY) before drawing, and all stroke widths are
+                // specified in raw pixels. This guarantees both beams always
+                // render as clean, undistorted VERTICAL lines (top-to-bottom)
+                // on every device, regardless of aspect ratio — the previous
+                // approach of drawing them inside the non-uniform scale()
+                // block could visually squash a tall thin line into
+                // something that read as horizontal on some screens.
+                Canvas(modifier = Modifier.fillMaxSize().testTag("beam_overlay_canvas")) {
+                    // Boss Lightning Strike — red-mixed, vertical, tracks the
+                    // player's x continuously (locked via lightningTargetX)
+                    playState.activeEnemies.forEach { enemy ->
+                        if (enemy.type == EnemyType.BOSS && enemy.lightningState != 0) {
+                            val realX = enemy.lightningTargetX * scaleX
+                            val realTopY = (enemy.y + 110f) * scaleY
+                            val realBottomY = VH * scaleY
+
+                            if (enemy.lightningState == 1) {
+                                val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.75f else 0.3f
+                                drawLine(
+                                    color = Color(0xFFFF3344).copy(alpha = flicker),
+                                    start = Offset(realX, realTopY),
+                                    end = Offset(realX, realBottomY),
+                                    strokeWidth = 8f
+                                )
+                                drawCircle(Color(0xFFFF3344).copy(alpha = flicker), 26f,
+                                    Offset(realX, realBottomY - 50f))
+                            } else if (enemy.lightningState == 2) {
+                                val segs = 14
+                                val path = Path()
+                                var cx = realX; var cy = realTopY
+                                path.moveTo(cx, cy)
+                                val segLen = (realBottomY - realTopY) / segs
+                                for (s in 1..segs) {
+                                    cx = realX + (kotlin.random.Random.nextFloat() - 0.5f) * 50f
+                                    cy = realTopY + segLen * s
+                                    path.lineTo(cx, cy)
+                                }
+                                drawPath(path, Color(0xFFFF3344).copy(alpha = 0.45f), style = Stroke(width = 26f))
+                                drawPath(path, Color(0xFFFF6600), style = Stroke(width = 12f))
+                                drawPath(path, Color.White, style = Stroke(width = 4f))
+                            }
+                        }
+                    }
+
+                    // Ship's Electric Wave ultimate — blue-mixed, vertical,
+                    // straight up from the ship to the top of the screen
+                    if (playState.ultimateBeamTimer > 0f) {
+                        val realX = playerShip.x * scaleX
+                        val realStartY = playerShip.y * scaleY
+                        val segs = 12
+                        val path = Path()
+                        var cx = realX; var cy = realStartY
+                        path.moveTo(cx, cy)
+                        val segLen = realStartY / segs
+                        for (s in 1..segs) {
+                            cx = realX + (kotlin.random.Random.nextFloat() - 0.5f) * 40f
+                            cy = realStartY - segLen * s
+                            path.lineTo(cx, cy)
+                        }
+                        val a = (playState.ultimateBeamTimer / 0.45f).coerceIn(0f, 1f)
+                        drawPath(path, Color(0xFF0066FF).copy(alpha = 0.4f * a), style = Stroke(width = 28f))
+                        drawPath(path, Color(0xFF00BFFF).copy(alpha = a), style = Stroke(width = 12f))
+                        drawPath(path, Color.White.copy(alpha = a), style = Stroke(width = 4f))
                     }
                 }
 
