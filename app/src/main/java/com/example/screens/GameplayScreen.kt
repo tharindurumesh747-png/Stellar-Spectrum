@@ -362,38 +362,47 @@ fun GameplayScreen(viewModel: GameViewModel) {
                 // block could visually squash a tall thin line into
                 // something that read as horizontal on some screens.
                 Canvas(modifier = Modifier.fillMaxSize().testTag("beam_overlay_canvas")) {
-                    // Boss Lightning Strike — red-mixed, vertical, tracks the
-                    // player's x continuously (locked via lightningTargetX)
+                    // Boss Lightning Strike — FINAL DESIGN: a full-width
+                    // HORIZONTAL glowing bar that sweeps DOWNWARD over time,
+                    // exactly like a horizontal scanning laser. It spans the
+                    // entire screen width, so left/right movement can never
+                    // dodge it — only the shield blocks it. Red-mixed glow
+                    // (white core, red/orange outer) matching the reference
+                    // "Moving Electric Strike" effect.
                     playState.activeEnemies.forEach { enemy ->
                         if (enemy.type == EnemyType.BOSS && enemy.lightningState != 0) {
-                            val realX = enemy.lightningTargetX * scaleX
-                            val realTopY = (enemy.y + 110f) * scaleY
-                            val realBottomY = VH * scaleY
+                            val realBarY = enemy.lightningBarY * scaleY
+                            val flicker = when {
+                                enemy.lightningState == 1 ->
+                                    if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.85f else 0.35f
+                                else -> 0.9f + 0.1f * kotlin.random.Random.nextFloat()
+                            }
+                            val barHeight = if (enemy.lightningState == 1) 5f else 9f
 
-                            if (enemy.lightningState == 1) {
-                                val flicker = if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.75f else 0.3f
-                                drawLine(
-                                    color = Color(0xFFFF3344).copy(alpha = flicker),
-                                    start = Offset(realX, realTopY),
-                                    end = Offset(realX, realBottomY),
-                                    strokeWidth = 8f
-                                )
-                                drawCircle(Color(0xFFFF3344).copy(alpha = flicker), 26f,
-                                    Offset(realX, realBottomY - 50f))
-                            } else if (enemy.lightningState == 2) {
-                                val segs = 14
-                                val path = Path()
-                                var cx = realX; var cy = realTopY
-                                path.moveTo(cx, cy)
-                                val segLen = (realBottomY - realTopY) / segs
-                                for (s in 1..segs) {
-                                    cx = realX + (kotlin.random.Random.nextFloat() - 0.5f) * 50f
-                                    cy = realTopY + segLen * s
-                                    path.lineTo(cx, cy)
+                            // Outer wide glow
+                            drawRect(
+                                color = Color(0xFFFF3344).copy(alpha = flicker * 0.35f),
+                                topLeft = Offset(0f, realBarY - barHeight * 4f),
+                                size = Size(realWpx, barHeight * 8f)
+                            )
+                            // Mid glow band
+                            drawRect(
+                                color = Color(0xFFFF6600).copy(alpha = flicker * 0.6f),
+                                topLeft = Offset(0f, realBarY - barHeight * 1.6f),
+                                size = Size(realWpx, barHeight * 3.2f)
+                            )
+                            // Bright core line
+                            drawRect(
+                                color = Color.White.copy(alpha = flicker),
+                                topLeft = Offset(0f, realBarY - barHeight / 2f),
+                                size = Size(realWpx, barHeight)
+                            )
+                            // A few bright sparks along the bar for extra "electric" feel
+                            if (enemy.lightningState == 2) {
+                                repeat(6) {
+                                    val sx = kotlin.random.Random.nextFloat() * realWpx
+                                    drawCircle(Color.White.copy(alpha = 0.8f), 3f, Offset(sx, realBarY))
                                 }
-                                drawPath(path, Color(0xFFFF3344).copy(alpha = 0.45f), style = Stroke(width = 26f))
-                                drawPath(path, Color(0xFFFF6600), style = Stroke(width = 12f))
-                                drawPath(path, Color.White, style = Stroke(width = 4f))
                             }
                         }
                     }
