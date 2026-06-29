@@ -88,9 +88,15 @@ data class EnemyDrone(
     var hit70: Boolean = false,
     var hit50: Boolean = false,
     var hit20: Boolean = false,
-    // Locks onto the PLAYER's x position (not the boss's own x) so the
-    // strike tracks the ship and cannot be dodged by moving sideways —
-    // only the shield can block it.
+    // FINAL DESIGN: a full-width horizontal glowing bar that sweeps
+    // DOWNWARD from the boss's position to the bottom of the screen over
+    // time — like a horizontal scanning laser. Since it spans the entire
+    // screen width, no left/right movement can dodge it; only the shield
+    // (raised at the right moment) blocks it.
+    var lightningBarY: Float = 0f,
+    var lightningHitApplied: Boolean = false,
+    // Unused legacy field, kept only so existing saved state / references
+    // don't break; no longer drives any rendering or logic.
     var lightningTargetX: Float = 0f
 ) {
     fun update(deltaTime: Float, screenWidth: Float, playerX: Float, currentWorld: Int) {
