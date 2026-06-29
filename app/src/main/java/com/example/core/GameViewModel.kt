@@ -445,43 +445,46 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         else -> false
                     }
                     if (shouldFire) {
-                        enemy.lightningState = 1 // charging / telegraph
-                        enemy.ultimateTimer = 1.3f
-                        enemy.lightningTargetX = player.x
+                        enemy.lightningState = 1 // charging / telegraph (bar flickers at boss's y)
+                        enemy.ultimateTimer = 0.5f
+                        enemy.lightningBarY = enemy.y + 110f
+                        enemy.lightningHitApplied = false
                         SoundSynth.playUiClick()
                     }
                 } else if (enemy.lightningState == 1) {
                     enemy.ultimateTimer -= deltaTime
-                    // FIX: continuously re-lock onto the player's CURRENT x
-                    // every frame while charging. This is the actual fix for
-                    // "it should be vertical and inescapable" — previously
-                    // the column was anchored to the boss's own x, so simply
-                    // walking away during the charge dodged it for free.
-                    // Now wherever the ship goes, the bolt follows; only the
-                    // shield can stop it.
-                    enemy.lightningTargetX = player.x
                     if (enemy.ultimateTimer <= 0f) {
-                        enemy.lightningState = 2 // strike!
-                        enemy.ultimateTimer = 0.35f
-                        // Target frozen at the exact instant of impact
-                        val withinColumn = kotlin.math.abs(player.x - enemy.lightningTargetX) < 95f
-                        if (withinColumn) {
-                            if (player.isShieldActive) {
-                                particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                                    Color(0xFF00ADB5).copy(alpha = 0.55f), 0.5f))
-                                ultimateCharge = minOf(1f, ultimateCharge + 0.3f)
-                                SoundSynth.playPowerup()
-                            } else {
-                                particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                                    Color.Red.copy(alpha = 0.5f), 0.45f))
-                                player.hp = maxOf(0, player.hp - 35)
-                                triggerVibration(getApplication(), 180)
-                            }
-                        }
+                        enemy.lightningState = 2 // begin sweeping downward
+                        enemy.ultimateTimer = 0f // now used as elapsed sweep time
                     }
                 } else if (enemy.lightningState == 2) {
-                    enemy.ultimateTimer -= deltaTime
-                    if (enemy.ultimateTimer <= 0f) enemy.lightningState = 0
+                    // FINAL DESIGN: a full-width horizontal bar sweeps from
+                    // just below the boss down to the bottom of the screen
+                    // over ~1.6s. Spanning the entire width means moving
+                    // left/right can NEVER dodge it — the only defense is
+                    // raising the shield at the moment it crosses your y.
+                    val sweepDuration = 1.6f
+                    enemy.ultimateTimer += deltaTime
+                    val progress = (enemy.ultimateTimer / sweepDuration).coerceIn(0f, 1f)
+                    val startY = enemy.y + 110f
+                    enemy.lightningBarY = startY + progress * (1920f - startY)
+
+                    if (!enemy.lightningHitApplied && kotlin.math.abs(enemy.lightningBarY - player.y) < 55f) {
+                        enemy.lightningHitApplied = true
+                        if (player.isShieldActive) {
+                            particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                                Color(0xFF00ADB5).copy(alpha = 0.55f), 0.5f))
+                            ultimateCharge = minOf(1f, ultimateCharge + 0.3f)
+                            SoundSynth.playPowerup()
+                        } else {
+                            particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
+                                Color.Red.copy(alpha = 0.5f), 0.45f))
+                            player.hp = maxOf(0, player.hp - 35)
+                            triggerVibration(getApplication(), 180)
+                        }
+                    }
+
+                    if (progress >= 1f) enemy.lightningState = 0
                 }
             } else if ((0..1000).random() < 2 + wave) {
                 bullets.add(Projectile(enemy.x, enemy.y + 35f, 0f, 380f, enemy.auraColor, false))
