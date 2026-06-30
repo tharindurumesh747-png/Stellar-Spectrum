@@ -8,7 +8,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,67 +18,42 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.ExplosionDefinition
+import com.example.core.GameData
 import com.example.core.GameScreen
 import com.example.core.GameViewModel
 import com.example.core.SoundSynth
+import com.example.core.TrailDefinition
 import com.example.ui.NeonButton
 import com.example.ui.NeonCard
 import com.example.ui.SynthwaveGridBackground
 import com.example.ui.triggerVibration
-
-data class ShopItem(
-    val id: String,
-    val name: String,
-    val cost: Int,
-    val description: String,
-    val visualHint: String
-)
 
 @Composable
 fun ShopScreen(viewModel: GameViewModel) {
     val progress by viewModel.userProgress.collectAsStateWithLifecycle()
     val crystalCount = progress?.crystals ?: 0
     val vibrationEnabled = progress?.vibrationEnabled ?: true
+    val unlockedTrails = progress?.getUnlockedTrails() ?: emptyList()
+    val unlockedExplosions = progress?.getUnlockedExplosions() ?: emptyList()
+    val selectedTrail = progress?.selectedTrail ?: "default"
+    val selectedExplosion = progress?.selectedExplosion ?: "default"
 
     var selectedTab by remember { mutableStateOf("ENGINE_TRAILS") }
-
     val context = LocalContext.current
 
-    // Aesthetic shop catalogs
-    val trailItems = listOf(
-        ShopItem("cyan_fume", "Cyan Fume Exhaust", 150, "Glow streams cyan exhaust smoke trail.", "☄️"),
-        ShopItem("purple_warp", "Wormhole Quantum", 350, "Discharges pulsing gravitational purple rings.", "🌀"),
-        ShopItem("gold_dust", "Crystalline Sparkle", 600, "Sheds sparkling gold dust coordinates behind wings.", "✨"),
-        ShopItem("omega_clon", "Omega Spectral Echo", 1200, "Leaves a glowing white static silhouette tail.", "👥")
-    )
-
-    val explosionItems = listOf(
-        ShopItem("cosmic_ring", "Radial Ring Burst", 200, "On collision, spawns a massive expands circle.", "⭕"),
-        ShopItem("pixel_shrapnel", "Retro Cube Shrapnel", 450, "Spawns retro square shards upon drones deaths.", "⏹️"),
-        ShopItem("chroma_flicker", "Chromic Aberration Flash", 800, "Briefly flickers full screen chromatic scale tints.", "🌈")
-    )
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .testTag("shop_screen_root")
-    ) {
+    Box(modifier = Modifier.fillMaxSize().testTag("shop_screen_root")) {
         SynthwaveGridBackground()
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(18.dp)
-                .verticalScroll(rememberScrollState()),
+            modifier = Modifier.fillMaxSize().padding(18.dp).verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Spacer(modifier = Modifier.height(30.dp))
 
-            // Navigation Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -87,158 +61,85 @@ fun ShopScreen(viewModel: GameViewModel) {
             ) {
                 Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .testTag("back_to_menu_button")
-                        .size(44.dp)
-                        .clip(CircleShape)
+                    modifier = Modifier.testTag("back_to_menu_button").size(44.dp).clip(CircleShape)
                         .background(Color(0xFF1F1F35).copy(alpha = 0.85f))
                         .border(1.dp, Color.Gray.copy(alpha = 0.3f), CircleShape)
-                        .clickable {
-                            viewModel.changeScreen(GameScreen.MAIN_MENU)
-                        }
-                ) {
-                    Text("◀", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
+                        .clickable { viewModel.changeScreen(GameScreen.MAIN_MENU) }
+                ) { Text("◀", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
 
-                Text(
-                    text = "SPECTRUM ESTHETICS",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                    letterSpacing = 1.6.sp
-                )
+                Text("SPECTRUM ESTHETICS", fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                    color = Color.White, letterSpacing = 1.6.sp)
 
-                // Crystal display
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(Color(0xFF0E111F))
+                    modifier = Modifier.clip(RoundedCornerShape(12.dp)).background(Color(0xFF0E111F))
                         .padding(vertical = 6.dp, horizontal = 12.dp)
                 ) {
-                    Text(
-                        text = "💎 $crystalCount",
-                        color = Color(0xFF00ADB5),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace
-                    )
+                    Text("💎 $crystalCount", color = Color(0xFF00ADB5), fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
                 }
             }
 
             Spacer(modifier = Modifier.height(25.dp))
 
-            // Custom sliding categorical tabs
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color(0xFF10111F))
-                    .padding(4.dp),
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                    .background(Color(0xFF10111F)).padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 val tab1Sel = selectedTab == "ENGINE_TRAILS"
                 Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
                         .background(if (tab1Sel) Color(0xFFFF2E63) else Color.Transparent)
-                        .clickable { selectedTab = "ENGINE_TRAILS" }
-                        .padding(vertical = 10.dp)
-                ) {
-                    Text(
-                        text = "TRAILS",
-                        color = if (tab1Sel) Color.White else Color.Gray,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                        .clickable { selectedTab = "ENGINE_TRAILS" }.padding(vertical = 10.dp)
+                ) { Text("TRAILS", color = if (tab1Sel) Color.White else Color.Gray,
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold) }
 
                 val tab2Sel = selectedTab == "EXPLOSIONS"
                 Box(
                     contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(8.dp))
+                    modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp))
                         .background(if (tab2Sel) Color(0xFFFF2E63) else Color.Transparent)
-                        .clickable { selectedTab = "EXPLOSIONS" }
-                        .padding(vertical = 10.dp)
-                ) {
-                    Text(
-                        text = "EXPLOSIONS",
-                        color = if (tab2Sel) Color.White else Color.Gray,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                        .clickable { selectedTab = "EXPLOSIONS" }.padding(vertical = 10.dp)
+                ) { Text("EXPLOSIONS", color = if (tab2Sel) Color.White else Color.Gray,
+                    fontSize = 12.sp, fontWeight = FontWeight.Bold) }
             }
 
             Spacer(modifier = Modifier.height(25.dp))
 
-            // Active list display based on selected tab
-            val displayList = if (selectedTab == "ENGINE_TRAILS") trailItems else explosionItems
-            
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                displayList.forEach { item ->
-                    val canAfford = crystalCount >= item.cost
-                    
-                    NeonCard(
-                        borderColor = if (canAfford) Color(0xFF00ADB5) else Color.DarkGray,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            // Left col description
-                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = item.visualHint,
-                                    fontSize = 28.sp,
-                                    modifier = Modifier.padding(end = 12.dp)
-                                )
-                                Column {
-                                    Text(
-                                        text = item.name,
-                                        color = Color.White,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Spacer(modifier = Modifier.height(2.dp))
-                                    Text(
-                                        text = item.description,
-                                        color = Color.LightGray,
-                                        fontSize = 12.sp,
-                                        lineHeight = 16.sp
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            // Buy button
-                            NeonButton(
-                                text = "💎 ${item.cost}",
-                                onClick = {
-                                    if (canAfford) {
-                                        viewModel.buyShip("aesthetic_dummy", item.cost) // deducts crystals safely
-                                        SoundSynth.playPowerup()
-                                        spawnCustomSparkles(context)
-                                    } else {
-                                        SoundSynth.playHitWrong()
-                                    }
-                                },
-                                enabled = canAfford,
-                                buttonColor = Color(0xFF00ADB5),
-                                vibrationEnabled = vibrationEnabled,
-                                modifier = Modifier.width(90.dp)
-                            )
-                        }
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                if (selectedTab == "ENGINE_TRAILS") {
+                    GameData.trails.forEach { item ->
+                        val isOwned = item.id == "default" || unlockedTrails.contains(item.id)
+                        val isEquipped = selectedTrail == item.id
+                        TrailExplosionCard(
+                            name = item.name, description = item.description, hint = item.visualHint,
+                            cost = item.cost, colorHex = item.colorHex,
+                            crystalCount = crystalCount, isOwned = isOwned, isEquipped = isEquipped,
+                            vibrationEnabled = vibrationEnabled,
+                            onBuy = {
+                                viewModel.buyTrail(item.id, item.cost)
+                                triggerVibration(context, 40)
+                            },
+                            onEquip = { viewModel.selectTrail(item.id) }
+                        )
+                    }
+                } else {
+                    GameData.explosions.forEach { item ->
+                        val isOwned = item.id == "default" || unlockedExplosions.contains(item.id)
+                        val isEquipped = selectedExplosion == item.id
+                        TrailExplosionCard(
+                            name = item.name, description = item.description, hint = item.visualHint,
+                            cost = item.cost, colorHex = item.colorHex,
+                            crystalCount = crystalCount, isOwned = isOwned, isEquipped = isEquipped,
+                            vibrationEnabled = vibrationEnabled,
+                            onBuy = {
+                                viewModel.buyExplosion(item.id, item.cost)
+                                triggerVibration(context, 40)
+                            },
+                            onEquip = { viewModel.selectExplosion(item.id) }
+                        )
                     }
                 }
             }
@@ -248,7 +149,82 @@ fun ShopScreen(viewModel: GameViewModel) {
     }
 }
 
-private fun spawnCustomSparkles(context: android.content.Context) {
-    // Triggers feedback vibration haptically
-    triggerVibration(context, 40)
+@Composable
+private fun TrailExplosionCard(
+    name: String, description: String, hint: String, cost: Int, colorHex: Long,
+    crystalCount: Int, isOwned: Boolean, isEquipped: Boolean, vibrationEnabled: Boolean,
+    onBuy: () -> Unit, onEquip: () -> Unit
+) {
+    val canAfford = crystalCount >= cost
+    val borderColor = when {
+        isEquipped -> Color(0xFF10B981)
+        isOwned -> Color(colorHex)
+        canAfford -> Color(0xFF00ADB5)
+        else -> Color.DarkGray
+    }
+
+    NeonCard(borderColor = borderColor, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                Text(hint, fontSize = 28.sp, modifier = Modifier.padding(end = 12.dp))
+                Column {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(name, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        if (isEquipped) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier.clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0xFF10B981).copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text("EQUIPPED", color = Color(0xFF10B981), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(description, color = Color.LightGray, fontSize = 12.sp, lineHeight = 16.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            when {
+                isEquipped -> {
+                    Box(
+                        modifier = Modifier.width(90.dp).clip(RoundedCornerShape(8.dp))
+                            .background(Color(0xFF10B981).copy(alpha = 0.15f))
+                            .border(1.dp, Color(0xFF10B981).copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) { Text("ACTIVE", color = Color(0xFF10B981), fontSize = 11.sp, fontWeight = FontWeight.Bold) }
+                }
+                isOwned -> {
+                    NeonButton(
+                        text = "EQUIP",
+                        onClick = onEquip,
+                        buttonColor = Color(0xFF00ADB5),
+                        vibrationEnabled = vibrationEnabled,
+                        modifier = Modifier.width(90.dp)
+                    )
+                }
+                else -> {
+                    NeonButton(
+                        text = "💎 $cost",
+                        onClick = {
+                            if (canAfford) { onBuy(); SoundSynth.playPowerup() }
+                            else SoundSynth.playHitWrong()
+                        },
+                        enabled = canAfford,
+                        buttonColor = Color(0xFF00ADB5),
+                        vibrationEnabled = vibrationEnabled,
+                        modifier = Modifier.width(90.dp)
+                    )
+                }
+            }
+        }
+    }
 }
