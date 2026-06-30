@@ -304,12 +304,35 @@ fun GameplayScreen(viewModel: GameViewModel) {
                         // Particles
                         playState.activeParticles.forEach { part ->
                             when (part.type) {
-                                ParticleType.EXPLOSION -> drawCircle(
-                                    part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
-                                    part.size*1.3f*(part.life/part.maxLife), Offset(part.x, part.y))
-                                ParticleType.TRAIL -> drawCircle(
-                                    part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
-                                    part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y))
+                                ParticleType.EXPLOSION -> {
+                                    // pixel_shrapnel cosmetic: square shards instead of circles
+                                    if (part.color == Color(0xFFFBBF24) && playState.selectedExplosion == "pixel_shrapnel") {
+                                        val s = part.size * 1.1f * (part.life/part.maxLife)
+                                        drawRect(part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
+                                            Offset(part.x - s/2f, part.y - s/2f), Size(s, s))
+                                    } else {
+                                        drawCircle(
+                                            part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
+                                            part.size*1.3f*(part.life/part.maxLife), Offset(part.x, part.y))
+                                    }
+                                }
+                                ParticleType.TRAIL -> {
+                                    // gold_dust cosmetic: tiny sparkle cross instead of a soft circle
+                                    if (part.text == "gold_dust") {
+                                        val a = (part.life/part.maxLife)
+                                        val s = part.size * a * 2.2f
+                                        drawLine(part.color.copy(alpha = a), Offset(part.x - s, part.y), Offset(part.x + s, part.y), 2f)
+                                        drawLine(part.color.copy(alpha = a), Offset(part.x, part.y - s), Offset(part.x, part.y + s), 2f)
+                                    } else if (part.text == "purple_warp") {
+                                        drawCircle(part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
+                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y),
+                                            style = Stroke(width = 2f))
+                                    } else {
+                                        drawCircle(
+                                            part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
+                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y))
+                                    }
+                                }
                                 ParticleType.SHOCKWAVE -> {
                                     val fraction = 1.0f - (part.life/part.maxLife)
                                     drawCircle(part.color.copy(alpha=(part.life/part.maxLife)*0.8f),
