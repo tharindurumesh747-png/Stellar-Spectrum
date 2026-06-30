@@ -148,6 +148,61 @@ class UserProgressRepository(private val dao: UserProgressDao) {
         }
     }
 
+    // ── COSMETICS: trails & explosions ──────────────────────────────
+    // FIX: previously the shop called buyShip() with a fake id that just
+    // deducted crystals and saved nothing meaningful. These are the real
+    // purchase + equip functions, atomic via the same Mutex as everything
+    // else so they can't race against a high-score save either.
+    suspend fun unlockTrail(trailId: String, cost: Int): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = getOrCreateLocked()
+            if (current.getUnlockedTrails().contains(trailId)) return@withLock true
+            if (current.crystals >= cost) {
+                val unlocked = current.getUnlockedTrails().toMutableList()
+                unlocked.add(trailId)
+                dao.saveProgress(current.copy(
+                    crystals = current.crystals - cost,
+                    unlockedTrailsStr = unlocked.joinToString(",")
+                ))
+                true
+            } else false
+        }
+    }
+
+    suspend fun unlockExplosion(explosionId: String, cost: Int): Boolean = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = getOrCreateLocked()
+            if (current.getUnlockedExplosions().contains(explosionId)) return@withLock true
+            if (current.crystals >= cost) {
+                val unlocked = current.getUnlockedExplosions().toMutableList()
+                unlocked.add(explosionId)
+                dao.saveProgress(current.copy(
+                    crystals = current.crystals - cost,
+                    unlockedExplosionsStr = unlocked.joinToString(",")
+                ))
+                true
+            } else false
+        }
+    }
+
+    suspend fun selectTrail(trailId: String) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = getOrCreateLocked()
+            if (trailId == "default" || current.getUnlockedTrails().contains(trailId)) {
+                dao.saveProgress(current.copy(selectedTrail = trailId))
+            }
+        }
+    }
+
+    suspend fun selectExplosion(explosionId: String) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val current = getOrCreateLocked()
+            if (explosionId == "default" || current.getUnlockedExplosions().contains(explosionId)) {
+                dao.saveProgress(current.copy(selectedExplosion = explosionId))
+            }
+        }
+    }
+
     suspend fun resetAllData() = withContext(Dispatchers.IO) {
         mutex.withLock { dao.saveProgress(UserProgress()) }
     }
