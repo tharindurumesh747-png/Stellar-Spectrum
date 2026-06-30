@@ -41,9 +41,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     var musicEnabled = true
     var vibrationEnabled = true
 
-    // 3x enemy density: boss now appears after 60 kills (was 20), and up to
-    // 20 enemies can be on screen at once (was 8).
-    private val killsPerBoss = 60
+    // Per-world boss kill thresholds now live in GameData.worlds
+    // (killsRequiredForBoss) instead of one fixed value for every world.
     private val maxConcurrentEnemies = 20
 
     init {
@@ -130,13 +129,17 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             currentWave = 1,
             isBossFight = false,
             ultimateCharge = 0f,
-            shieldBoxesSpawnedCount = 0
+            shieldBoxesSpawnedCount = 0,
+            // FIX: equipped cosmetics now flow into gameplay rendering.
+            selectedTrail = progress.selectedTrail,
+            selectedExplosion = progress.selectedExplosion
         )
 
         changeScreen(GameScreen.GAMEPLAY)
     }
 
     private fun spawnSingleEnemy(world: Int, wave: Int): EnemyDrone {
+        val worldDef = GameData.worlds.first { it.index == world }
         val roll = (0..99).random()
         val type = when (world) {
             1 -> if (roll < 20) EnemyType.WARP else EnemyType.PULSE
@@ -147,8 +150,14 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         }
         val spawnX = 100f + kotlin.random.Random.nextFloat() * 880f
         val aura = EnergyColor.random()
-        val speedY = 130f + wave * 14f
-        val speedX = when (type) { EnemyType.SPLIT -> 180f; EnemyType.PRISM -> 160f; else -> 0f }
+        // FIX: per-world enemySpeedMultiplier now actually applied — this is
+        // a big part of why every world played identically before.
+        val speedY = (130f + wave * 14f) * worldDef.enemySpeedMultiplier
+        val speedX = when (type) {
+            EnemyType.SPLIT -> 180f * worldDef.enemySpeedMultiplier
+            EnemyType.PRISM -> 160f * worldDef.enemySpeedMultiplier
+            else -> 0f
+        }
 
         return EnemyDrone(
             type = type, x = spawnX, y = -60f, vx = speedX, vy = speedY,
@@ -159,7 +168,10 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun spawnBoss(world: Int): EnemyDrone {
-        val bossHp = when (world) { 1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300 }
+        val worldDef = GameData.worlds.first { it.index == world }
+        val baseHp = when (world) { 1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300 }
+        // FIX: per-world bossHpMultiplier now actually applied.
+        val bossHp = (baseHp * worldDef.bossHpMultiplier).toInt()
         val aura = when (world) {
             1 -> EnergyColor.RED; 2 -> EnergyColor.RED; 3 -> EnergyColor.BLUE
             4 -> EnergyColor.RED; 5 -> EnergyColor.PURPLE; else -> EnergyColor.RED
@@ -348,18 +360,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         while (pIter.hasNext()) { val part = pIter.next(); part.update(deltaTime); if (part.runOut) pIter.remove() }
 
         if ((0..10).random() < 3) {
-            val trailColor = when (player.currentWeaponColor) {
-                EnergyColor.RED -> Color(0xFFFF2E63); EnergyColor.BLUE -> Color(0xFF00ADB5)
-                EnergyColor.GREEN -> Color(0xFF10B981); EnergyColor.PURPLE -> Color(0xFFBD00FF)
+            // FIX: equipped trail cosmetic now changes the trail's color
+            // instead of always using the weapon color. "default" keeps the
+            // original weapon-color behavior.
+            val trailColor = when (currentPlay.selectedTrail) {
+                "cyan_fume" -> Color(0xFF00E5FF)
+                "purple_warp" -> Color(0xFFBD00FF)
+                "gold_dust" -> Color(0xFFFFD700)
+                "omega_clon" -> Color(0xFFEEEEEE)
+                else -> when (player.currentWeaponColor) {
+                    EnergyColor.RED -> Color(0xFFFF2E63); EnergyColor.BLUE -> Color(0xFF00ADB5)
+                    EnergyColor.GREEN -> Color(0xFF10B981); EnergyColor.PURPLE -> Color(0xFFBD00FF)
+                }
             }
+            val trailSize = if (currentPlay.selectedTrail == "gold_dust") (3..7).random().toFloat()
+                             else (6..12).random().toFloat()
             particles.add(Particle(
                 type = ParticleType.TRAIL,
                 x = player.x + (-20f + kotlin.random.Random.nextFloat() * 40f),
                 y = player.y + 35f,
                 vx = -40f + kotlin.random.Random.nextFloat() * 80f,
                 vy = 150f + kotlin.random.Random.nextFloat() * 150f,
-                size = (6..12).random().toFloat(),
-                color = trailColor.copy(alpha = 0.65f), maxLife = 0.4f
+                size = trailSize,
+                color = trailColor.copy(alpha = 0.65f), maxLife = 0.4f,
+                text = currentPlay.selectedTrail
             ))
         }
 
@@ -381,15 +405,21 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
             if (bullet.isOutOfBounds) bulletIter.remove()
         }
 
-        // Continuous spawning — 3x density via killsPerBoss & maxConcurrentEnemies
+        // FIX: kills-required-for-boss and spawn rate now come from the
+        // per-world definition instead of one fixed value for every world —
+        // this is the main reason every world used to take the same ~10
+        // minutes regardless of which one you picked.
+        val worldDef = GameData.worlds.first { it.index == currentPlay.worldIndex }
+        val worldKillsPerBoss = worldDef.killsRequiredForBoss
         wave = (1 + totalKilled / 8).coerceAtMost(6)
 
-        if (!bossActive && totalKilled > 0 && totalKilled % killsPerBoss == 0 && enemies.none { it.type == EnemyType.BOSS }) {
+        if (!bossActive && totalKilled > 0 && totalKilled % worldKillsPerBoss == 0 && enemies.none { it.type == EnemyType.BOSS }) {
             enemies.add(spawnBoss(currentPlay.worldIndex))
             bossActive = true
         } else if (!bossActive && spawnTimer <= 0f && enemies.size < maxConcurrentEnemies) {
             enemies.add(spawnSingleEnemy(currentPlay.worldIndex, wave))
-            spawnTimer = (1.5f - wave * 0.16f).coerceAtLeast(0.4f)
+            val baseInterval = (1.5f - wave * 0.16f).coerceAtLeast(0.4f)
+            spawnTimer = baseInterval / worldDef.spawnRateMultiplier
         }
 
         // ── SHIELD BONUS BOXES ────────────────────────────────────────
@@ -398,8 +428,8 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
         // on shield charge before the Lightning Strike attacks begin.
         var shieldBoxesSpawned = currentPlay.shieldBoxesSpawnedCount
         if (!bossActive) {
-            val killsInCycle = totalKilled % killsPerBoss
-            val nextBoxThreshold = (shieldBoxesSpawned + 1) * (killsPerBoss / 4)
+            val killsInCycle = totalKilled % worldKillsPerBoss
+            val nextBoxThreshold = (shieldBoxesSpawned + 1) * (worldKillsPerBoss / 4)
             if (killsInCycle >= nextBoxThreshold && shieldBoxesSpawned < 3) {
                 powerups.add(PowerUp(
                     type = PowerUpType.SHIELD,
@@ -408,7 +438,7 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                 ))
                 shieldBoxesSpawned++
             }
-            if (killsInCycle < (killsPerBoss / 4)) shieldBoxesSpawned = 0
+            if (killsInCycle < (worldKillsPerBoss / 4)) shieldBoxesSpawned = 0
         }
 
         val enemyIter = enemies.iterator()
@@ -558,6 +588,30 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
                         eIter.remove()
                         totalKilled++
                         ultimateCharge = minOf(1f, ultimateCharge + 1f / 12f)
+
+                        // FIX: equipped explosion cosmetic now actually changes
+                        // what plays on a confirmed kill — previously this was
+                        // bought but never read anywhere. "default" keeps the
+                        // small per-hit burst above as the only effect; the
+                        // others add a distinct extra burst on the kill itself.
+                        when (currentPlay.selectedExplosion) {
+                            "cosmic_ring" -> particles.add(Particle(
+                                ParticleType.SHOCKWAVE, enemy.x, enemy.y, 0f, 0f, 0f,
+                                Color(0xFF00ADB5), 0.5f))
+                            "pixel_shrapnel" -> {
+                                for (i in 0..9) {
+                                    particles.add(Particle(
+                                        type = ParticleType.EXPLOSION, x = enemy.x, y = enemy.y,
+                                        vx = -300f + kotlin.random.Random.nextFloat()*600f,
+                                        vy = -300f + kotlin.random.Random.nextFloat()*600f,
+                                        size = 14f, color = Color(0xFFFBBF24), maxLife = 0.5f
+                                    ))
+                                }
+                            }
+                            "chroma_flicker" -> particles.add(Particle(
+                                ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
+                                Color(0xFFBD00FF).copy(alpha = 0.22f), 0.25f))
+                        }
 
                         if (enemy.type == EnemyType.SPLIT) {
                             // FIX: queue instead of adding directly to `enemies`
@@ -726,6 +780,44 @@ class GameViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectShip(shipId: String) { viewModelScope.launch { repository.selectShip(shipId) } }
 
+    // ── COSMETICS: trails & explosions ──────────────────────────────
+    // FIX: these are the real purchase/equip functions. The shop previously
+    // called buyShip("aesthetic_dummy", cost) which deducted crystals but
+    // never recorded which trail/explosion was bought, and nothing in
+    // gameplay ever read it — purchases were completely disconnected from
+    // what you saw in-game.
+    fun buyTrail(trailId: String, cost: Int) {
+        viewModelScope.launch {
+            val progress = userProgress.value ?: return@launch
+            if (progress.crystals >= cost) {
+                if (repository.unlockTrail(trailId, cost)) {
+                    SoundSynth.playPowerup()
+                    repository.selectTrail(trailId) // auto-equip on purchase
+                }
+            } else SoundSynth.playHitWrong()
+        }
+    }
+
+    fun buyExplosion(explosionId: String, cost: Int) {
+        viewModelScope.launch {
+            val progress = userProgress.value ?: return@launch
+            if (progress.crystals >= cost) {
+                if (repository.unlockExplosion(explosionId, cost)) {
+                    SoundSynth.playPowerup()
+                    repository.selectExplosion(explosionId) // auto-equip on purchase
+                }
+            } else SoundSynth.playHitWrong()
+        }
+    }
+
+    fun selectTrail(trailId: String) {
+        viewModelScope.launch { repository.selectTrail(trailId); SoundSynth.playUiClick() }
+    }
+
+    fun selectExplosion(explosionId: String) {
+        viewModelScope.launch { repository.selectExplosion(explosionId); SoundSynth.playUiClick() }
+    }
+
     fun toggleSounds(sound: Boolean, music: Boolean, vibration: Boolean) {
         viewModelScope.launch { repository.updateSettings(sound, music, vibration) }
     }
@@ -845,5 +937,9 @@ data class GameplayState(
     // (see ultimateBeamTimer usage there) — avoids the old approach of
     // drawing the beam inside the non-uniform virtual->real scale
     // transform, which could visually distort/squash a vertical bolt.
-    val ultimateBeamTimer: Float = 0f
+    val ultimateBeamTimer: Float = 0f,
+    // Equipped cosmetics for this run — read by GameplayScreen to pick
+    // which trail/explosion visuals to draw.
+    val selectedTrail: String = "default",
+    val selectedExplosion: String = "default"
 )
