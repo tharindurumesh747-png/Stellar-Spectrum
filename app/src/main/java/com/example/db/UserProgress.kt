@@ -8,21 +8,27 @@ data class UserProgress(
     @PrimaryKey val id: Int = 1,
     val crystals: Int = 0,
     val selectedShip: String = "solar_wing",
-    val unlockedShipsStr: String = "solar_wing", // Comma-separated list of unlocked ships
-    val unlockedWorldsStr: String = "1", // Comma-separated list of unlocked world indices, e.g. "1"
-    val highScoresStr: String = "1:0,2:0,3:0,4:0,5:0,6:0", // Comma-separated level_index:score
+    val unlockedShipsStr: String = "solar_wing",
+    val unlockedWorldsStr: String = "1",
+    val highScoresStr: String = "1:0,2:0,3:0,4:0,5:0,6:0",
     val soundEnabled: Boolean = true,
     val musicEnabled: Boolean = true,
     val vibrationEnabled: Boolean = true,
-    val lastDailyReward: String = "", // Date string like "2026-06-02"
+    val lastDailyReward: String = "",
     val dailyRewardDay: Int = 0,
     val totalRuns: Int = 0,
     val totalEnemiesKilled: Int = 0,
     val totalBossesKilled: Int = 0,
-    val missionsProgressStr: String = "1:0,2:0,3:0,4:0,5:0", // mission_id:progress
-    val achievementsUnlockedStr: String = "" // Comma-separated list of unlocked achievement IDs
+    val missionsProgressStr: String = "1:0,2:0,3:0,4:0,5:0",
+    val achievementsUnlockedStr: String = "",
+    // NEW: cosmetic trails & explosions — these were previously purchased
+    // via a fake "aesthetic_dummy" id that deducted crystals but never
+    // recorded WHICH item was bought or equipped. Now properly tracked.
+    val unlockedTrailsStr: String = "",
+    val unlockedExplosionsStr: String = "",
+    val selectedTrail: String = "default",
+    val selectedExplosion: String = "default"
 ) {
-    // Helper to get high scores as a Map
     fun getHighScores(): Map<Int, Int> {
         val map = mutableMapOf<Int, Int>()
         if (highScoresStr.isEmpty()) return map
@@ -37,15 +43,12 @@ data class UserProgress(
         return map
     }
 
-    // Helper to create high scores string from Map
     companion object {
-        fun buildHighScoresStr(scores: Map<Int, Int>): String {
-            return scores.entries.joinToString(",") { "${it.key}:${it.value}" }
-        }
+        fun buildHighScoresStr(scores: Map<Int, Int>): String =
+            scores.entries.joinToString(",") { "${it.key}:${it.value}" }
 
-        fun buildMissionsProgressStr(progress: Map<Int, Int>): String {
-            return progress.entries.joinToString(",") { "${it.key}:${it.value}" }
-        }
+        fun buildMissionsProgressStr(progress: Map<Int, Int>): String =
+            progress.entries.joinToString(",") { "${it.key}:${it.value}" }
     }
 
     fun getMissionsProgress(): Map<Int, Int> {
@@ -62,16 +65,18 @@ data class UserProgress(
         return map
     }
 
-    fun getUnlockedShips(): List<String> {
-        return if (unlockedShipsStr.isEmpty()) emptyList() else unlockedShipsStr.split(",")
-    }
+    fun getUnlockedShips(): List<String> =
+        if (unlockedShipsStr.isEmpty()) emptyList() else unlockedShipsStr.split(",")
 
-    fun getUnlockedWorlds(): List<Int> {
-        if (unlockedWorldsStr.isEmpty()) return emptyList()
-        return unlockedWorldsStr.split(",").mapNotNull { it.toIntOrNull() }
-    }
+    fun getUnlockedWorlds(): List<Int> =
+        if (unlockedWorldsStr.isEmpty()) emptyList() else unlockedWorldsStr.split(",").mapNotNull { it.toIntOrNull() }
 
-    fun getUnlockedAchievements(): List<String> {
-        return if (achievementsUnlockedStr.isEmpty()) emptyList() else achievementsUnlockedStr.split(",")
-    }
+    fun getUnlockedAchievements(): List<String> =
+        if (achievementsUnlockedStr.isEmpty()) emptyList() else achievementsUnlockedStr.split(",")
+
+    fun getUnlockedTrails(): List<String> =
+        if (unlockedTrailsStr.isEmpty()) emptyList() else unlockedTrailsStr.split(",")
+
+    fun getUnlockedExplosions(): List<String> =
+        if (unlockedExplosionsStr.isEmpty()) emptyList() else unlockedExplosionsStr.split(",")
 }
