@@ -1,945 +1,676 @@
-package com.example.core
+package com.example.screens
 
-import android.app.Application
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.core.GameScreen
+import com.example.core.GameViewModel
+import com.example.entities.EnemyType
+import com.example.entities.EnergyColor
+import com.example.entities.ParticleType
+import com.example.ui.NeonButton
+import com.example.ui.NeonCard
+import com.example.ui.drawProceduralShip
 import com.example.ui.triggerVibration
-import com.example.db.AppDatabase
-import com.example.db.UserProgress
-import com.example.db.UserProgressRepository
-import com.example.entities.*
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.*
-import kotlin.math.atan2
+import kotlinx.coroutines.delay
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
-import kotlin.math.ceil
+import android.view.MotionEvent
 
-enum class GameScreen {
-    SPLASH, MAIN_MENU, SHIP_SELECT, WORLD_SELECT, GAMEPLAY, SHOP, ACHIEVEMENTS, MISSIONS, LEADERBOARD, SETTINGS
-}
+// Virtual design-space resolution all game logic is written against.
+private const val VW = 1080f
+private const val VH = 1920f
 
-class GameViewModel(application: Application) : AndroidViewModel(application) {
-    private val repository: UserProgressRepository
+// Fixed height of the bottom control bar (color wheel + shield). Kept small
+// on purpose so most of the screen stays dedicated to actual gameplay.
+private val CONTROL_BAR_HEIGHT = 118.dp
 
-    val activeScreen = MutableStateFlow(GameScreen.SPLASH)
-    val userProgress: StateFlow<UserProgress?>
-    val gameplayState = MutableStateFlow(GameplayState())
-    val playerShipState = MutableStateFlow(PlayerShip())
-    val dailyRewardAvailable = MutableStateFlow(false)
-    val showDailyRewardPopup = MutableStateFlow(false)
-    val showLeaderboardComingSoon = MutableStateFlow(false)
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+fun GameplayScreen(viewModel: GameViewModel) {
+    val progress by viewModel.userProgress.collectAsStateWithLifecycle()
+    val playState by viewModel.gameplayState.collectAsStateWithLifecycle()
+    val playerShip by viewModel.playerShipState.collectAsStateWithLifecycle()
+    val vibrationEnabled = progress?.vibrationEnabled ?: true
 
-    var soundEnabled = true
-    var musicEnabled = true
-    var vibrationEnabled = true
+    var isPaused by remember { mutableStateOf(false) }
+    val context = LocalContext.current
 
-    // Per-world boss kill thresholds now live in GameData.worlds
-    // (killsRequiredForBoss) instead of one fixed value for every world.
-    private val maxConcurrentEnemies = 20
+    var lastTouchX by remember { mutableStateOf(0f) }
+    var lastTouchY by remember { mutableStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
 
-    init {
-        val database = AppDatabase.getDatabase(application)
-        repository = UserProgressRepository(database.userProgressDao())
-        viewModelScope.launch { repository.ensureInitialized() }
-
-        userProgress = repository.progressFlow.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = null
-        )
-
-        viewModelScope.launch {
-            repository.progressFlow.collect { progress ->
-                progress?.let {
-                    soundEnabled = it.soundEnabled
-                    musicEnabled = it.musicEnabled
-                    vibrationEnabled = it.vibrationEnabled
-                    SoundSynth.setEnabled(soundEnabled)
-                    BgmEngine.setEnabled(musicEnabled)
-                    checkDailyRewardStatus(it)
-                }
-            }
+    val starCount = 35
+    val starsList = remember {
+        List(starCount) {
+            Offset(x = (0..VW.toInt()).random().toFloat(), y = (0..VH.toInt()).random().toFloat()) to (1..3).random()
         }
     }
 
-    private fun checkDailyRewardStatus(progress: UserProgress) {
-        val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-        dailyRewardAvailable.value = progress.lastDailyReward != todayStr
-    }
-
-    fun claimDailyReward() {
-        if (!dailyRewardAvailable.value) return
-        viewModelScope.launch {
-            // FIX: routed through updateAtomic so this can never race against
-            // completeRun() or any other save in flight.
-            val updated = repository.updateAtomic { progress ->
-                val todayStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
-                val nextDay = (progress.dailyRewardDay % 7) + 1
-                val rewardCrystals = nextDay * 50
-                progress.copy(
-                    crystals = progress.crystals + rewardCrystals,
-                    lastDailyReward = todayStr,
-                    dailyRewardDay = nextDay
-                )
-            }
-            dailyRewardAvailable.value = false
-            showDailyRewardPopup.value = false
-            SoundSynth.playPowerup()
-            triggerAchievementProgress("crystals", updated.crystals)
+    var lastTimeNanos by remember { mutableStateOf(System.nanoTime()) }
+    LaunchedEffect(isPaused, playState.gameEnded, playState.levelComplete) {
+        while (!isPaused && !playState.gameEnded && !playState.levelComplete) {
+            delay(16)
+            val now = System.nanoTime()
+            val dt = ((now - lastTimeNanos) / 1_000_000_000f).coerceIn(0.01f, 0.033f)
+            lastTimeNanos = now
+            viewModel.updateGame(dt)
+            if (isDragging) viewModel.fireBulletAt(lastTouchX, lastTouchY - 200f)
         }
     }
 
-    fun changeScreen(screen: GameScreen) {
-        activeScreen.value = screen
-        if (screen == GameScreen.GAMEPLAY) {
-            BgmEngine.start(gameplayState.value.worldIndex)
-        } else {
-            BgmEngine.stop()
-        }
-    }
+    // ── ROOT LAYOUT: gameplay area on top, dedicated control bar below ────
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF030308))) {
 
-    fun selectWorldAndStart(worldIndex: Int) {
-        val progress = userProgress.value ?: return
-        val worldDef = GameData.worlds.first { it.index == worldIndex }
-        val shipDef = GameData.ships.first { it.id == progress.selectedShip }
+        // ════════════════════ GAMEPLAY AREA (touch = move + fire) ════════════════════
+        BoxWithConstraints(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .testTag("gameplay_root")
+        ) {
+            val density = LocalDensity.current
+            val realWpx = with(density) { maxWidth.toPx() }
+            val realHpx = with(density) { maxHeight.toPx() }
+            val scaleX = if (realWpx > 0f) realWpx / VW else 1f
+            val scaleY = if (realHpx > 0f) realHpx / VH else 1f
 
-        val player = PlayerShip(
-            x = 540f, y = 1400f, targetX = 540f, targetY = 1400f,
-            maxHp = shipDef.hp, hp = shipDef.hp,
-            selectedShipId = shipDef.id
-        )
-        playerShipState.value = player
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInteropFilter { event ->
+                        if (playState.gameEnded || playState.levelComplete || isPaused) {
+                            return@pointerInteropFilter false
+                        }
+                        val vx = (event.x / scaleX)
+                        val vy = (event.y / scaleY)
+                        // Only the pause icon (top-right) needs an exclusion zone here —
+                        // color wheel & shield now live in their own bar, fully separate.
+                        val inPauseZone = vx > VW - 170f && vy < 220f
+                        if (inPauseZone) { isDragging = false; return@pointerInteropFilter false }
 
-        gameplayState.value = GameplayState(
-            worldIndex = worldIndex,
-            difficultyStars = worldDef.difficulty,
-            totalWaves = 5,
-            levelComplete = false,
-            gameEnded = false,
-            spawnTimer = 0.6f,
-            totalKilledThisRun = 0,
-            currentWave = 1,
-            isBossFight = false,
-            ultimateCharge = 0f,
-            shieldBoxesSpawnedCount = 0,
-            // FIX: equipped cosmetics now flow into gameplay rendering.
-            selectedTrail = progress.selectedTrail,
-            selectedExplosion = progress.selectedExplosion
-        )
-
-        changeScreen(GameScreen.GAMEPLAY)
-    }
-
-    private fun spawnSingleEnemy(world: Int, wave: Int): EnemyDrone {
-        val worldDef = GameData.worlds.first { it.index == world }
-        val roll = (0..99).random()
-        val type = when (world) {
-            1 -> if (roll < 20) EnemyType.WARP else EnemyType.PULSE
-            2 -> if (roll < 35) EnemyType.SPLIT else EnemyType.PULSE
-            3 -> when { roll < 25 -> EnemyType.WARP; roll < 50 -> EnemyType.SPLIT; else -> EnemyType.PULSE }
-            4 -> when { roll < 25 -> EnemyType.PRISM; roll < 50 -> EnemyType.SHIELD; else -> EnemyType.PULSE }
-            else -> EnemyType.values().filter { it != EnemyType.BOSS }.random()
-        }
-        val spawnX = 100f + kotlin.random.Random.nextFloat() * 880f
-        val aura = EnergyColor.random()
-        // FIX: per-world enemySpeedMultiplier now actually applied — this is
-        // a big part of why every world played identically before.
-        val speedY = (130f + wave * 14f) * worldDef.enemySpeedMultiplier
-        val speedX = when (type) {
-            EnemyType.SPLIT -> 180f * worldDef.enemySpeedMultiplier
-            EnemyType.PRISM -> 160f * worldDef.enemySpeedMultiplier
-            else -> 0f
-        }
-
-        return EnemyDrone(
-            type = type, x = spawnX, y = -60f, vx = speedX, vy = speedY,
-            hp = if (type == EnemyType.SHIELD) 3 else 1,
-            maxHp = if (type == EnemyType.SHIELD) 3 else 1,
-            auraColor = aura
-        )
-    }
-
-    private fun spawnBoss(world: Int): EnemyDrone {
-        val worldDef = GameData.worlds.first { it.index == world }
-        val baseHp = when (world) { 1 -> 50; 2 -> 100; 3 -> 120; 4 -> 150; 5 -> 200; else -> 300 }
-        // FIX: per-world bossHpMultiplier now actually applied.
-        val bossHp = (baseHp * worldDef.bossHpMultiplier).toInt()
-        val aura = when (world) {
-            1 -> EnergyColor.RED; 2 -> EnergyColor.RED; 3 -> EnergyColor.BLUE
-            4 -> EnergyColor.RED; 5 -> EnergyColor.PURPLE; else -> EnergyColor.RED
-        }
-        return EnemyDrone(
-            type = EnemyType.BOSS, x = 540f, y = -200f, vx = 0f, vy = 0f,
-            hp = bossHp, maxHp = bossHp, auraColor = aura,
-            ultimateTimer = 7f
-        )
-    }
-
-    fun switchWeaponColor(color: EnergyColor) {
-        val player = playerShipState.value
-        if (player.currentWeaponColor != color) {
-            val updated = player.copy(currentWeaponColor = color)
-            SoundSynth.playUiClick()
-            registerMissionProgress(4, 1)
-            playerShipState.value = updated
-        }
-    }
-
-    fun fireBulletAt(targetTapX: Float, targetTapY: Float) {
-        val player = playerShipState.value
-        val now = System.currentTimeMillis()
-        val shipDef = GameData.ships.first { it.id == player.selectedShipId }
-        val fRate = if (player.selectedShipId == "quantum_falcon") (shipDef.fireRateMs * 0.82f).toLong() else shipDef.fireRateMs
-        if (now - player.lastShootTimeMs < fRate) return
-
-        val bulletColor = player.currentWeaponColor
-        val px = player.x
-        val py = player.y - 40f
-        val speed = 1000f
-
-        when (bulletColor) {
-            EnergyColor.RED -> SoundSynth.playShootRed()
-            EnergyColor.BLUE -> SoundSynth.playShootBlue()
-            EnergyColor.GREEN -> SoundSynth.playShootGreen()
-            EnergyColor.PURPLE -> SoundSynth.playShootPurple()
-        }
-
-        val list = gameplayState.value.activeBullets.toMutableList()
-        when (bulletColor) {
-            EnergyColor.RED -> list.add(Projectile(px, py, 0f, -speed * 1.2f, bulletColor, true))
-            EnergyColor.BLUE -> list.add(Projectile(px, py, 0f, -speed * 0.8f, bulletColor, true))
-            EnergyColor.GREEN -> {
-                list.add(Projectile(px, py - 10f, 0f, -speed, bulletColor, true))
-                list.add(Projectile(px, py, -220f, -speed * 0.95f, bulletColor, true))
-                list.add(Projectile(px, py, 220f, -speed * 0.95f, bulletColor, true))
-            }
-            EnergyColor.PURPLE -> list.add(Projectile(px, py, 0f, -speed * 0.9f, bulletColor, true))
-        }
-        gameplayState.value = gameplayState.value.copy(activeBullets = list)
-        // FIX: .copy() guarantees a genuinely new instance so Compose/StateFlow
-        // always detects the change (lastShootTimeMs updated here).
-        playerShipState.value = player.copy(lastShootTimeMs = now)
-    }
-
-    fun triggerSwipeDodge(swipeDirectionLeft: Boolean) {
-        val player = playerShipState.value
-        val boundsMove = if (swipeDirectionLeft) -250f else 250f
-        val newTargetX = (player.x + boundsMove).coerceIn(100f, 980f)
-        var updated = player.copy(targetX = newTargetX)
-        if (player.selectedShipId == "nova_phantom") {
-            updated = updated.copy(invincibilityTimeRemaining = 1.0f)
-            spawnCustomParticles(player.x, player.y, Color(0xFF10B981), ParticleType.COMBO_FLASH, "GHOST!")
-        }
-        playerShipState.value = updated
-    }
-
-    fun activateShield() {
-        val player = playerShipState.value
-        val canActivate = player.shieldStock > 0 || player.shieldCharge >= 1.0f
-        if (canActivate) {
-            SoundSynth.playPowerup()
-            spawnCustomParticles(player.x, player.y, Color.White, ParticleType.SHOCKWAVE)
-            // FIX: consume a stacked bonus charge first (icon + number badge
-            // stays visible, count just decreases). Only fall back to
-            // resetting the passively-regenerating base charge once all
-            // stacked bonus charges are used up.
-            if (player.shieldStock > 0) {
-                playerShipState.value = player.copy(
-                    shieldStock = player.shieldStock - 1,
-                    shieldActiveTimeRemaining = 3.0f
-                )
-            } else {
-                playerShipState.value = player.copy(
-                    shieldCharge = 0f,
-                    shieldActiveTimeRemaining = 3.0f
-                )
-            }
-        }
-    }
-
-    // ── ELECTRIC WAVE ULTIMATE ──────────────────────────────────────────
-    // Charges +1/12 per kill. When full, destroys ~50% of on-screen enemies
-    // (non-boss) and deals a heavy chunk of damage to a boss if present.
-    fun activateUltimate() {
-        val currentPlay = gameplayState.value
-        if (currentPlay.ultimateCharge < 1.0f) return
-
-        val enemies = currentPlay.activeEnemies.toMutableList()
-        val particles = currentPlay.activeParticles.toMutableList()
-        val playerNow = playerShipState.value
-        val nonBoss = enemies.filter { it.type != EnemyType.BOSS }
-        val killCount = ceil(nonBoss.size * 0.5f).toInt()
-        // FIX: a single vertical beam shoots straight up from the ship.
-        // It hits whichever enemies are closest to the ship's column —
-        // not a random scatter — so positioning under a cluster matters.
-        val toKill = nonBoss.sortedBy { kotlin.math.abs(it.x - playerNow.x) }.take(killCount)
-
-        var bonusScore = 0
-        var bonusCrystals = 0
-        toKill.forEach { e ->
-            enemies.remove(e)
-            bonusScore += 80
-            bonusCrystals += 1
-            for (i in 0..8) {
-                particles.add(Particle(
-                    type = ParticleType.EXPLOSION, x = e.x, y = e.y,
-                    vx = -200f + kotlin.random.Random.nextFloat()*400f,
-                    vy = -200f + kotlin.random.Random.nextFloat()*400f,
-                    size = 16f, color = Color(0xFF00BFFF), maxLife = 0.5f
-                ))
-            }
-        }
-        // Boss takes a big chunk of damage too
-        val boss = enemies.firstOrNull { it.type == EnemyType.BOSS }
-        if (boss != null) {
-            boss.hp = (boss.hp - (boss.maxHp * 0.2f).toInt()).coerceAtLeast(1)
-        }
-
-        // Big screen-wide electric flash
-        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
-            Color(0xFF00BFFF).copy(alpha = 0.5f), 0.4f))
-
-        SoundSynth.playPowerup()
-        gameplayState.value = currentPlay.copy(
-            activeEnemies = enemies,
-            activeParticles = particles,
-            score = currentPlay.score + bonusScore,
-            crystalsCollectedThisRun = currentPlay.crystalsCollectedThisRun + bonusCrystals,
-            ultimateCharge = 0f,
-            // FIX: dedicated unscaled-render timer instead of a particle —
-            // see GameplayScreen's separate beam-overlay Canvas.
-            ultimateBeamTimer = 0.45f
-        )
-    }
-
-    // ── MAIN GAME LOOP ────────────────────────────────────────────────
-    fun updateGame(deltaTime: Float) {
-        val currentPlay = gameplayState.value
-        if (currentPlay.gameEnded || currentPlay.levelComplete) return
-
-        var player = playerShipState.value
-        player.update(deltaTime, 1.0f)
-        if (player.shieldActiveTimeRemaining <= 0f) {
-            val chargeSpeed = if (player.selectedShipId == "eclipse_runner") 0.30f else 0.18f
-            player.shieldCharge = minOf(1.0f, player.shieldCharge + chargeSpeed * deltaTime)
-        }
-
-        val bullets = currentPlay.activeBullets.toMutableList()
-        val enemies = currentPlay.activeEnemies.toMutableList()
-        // FIX (crash bug): SPLIT enemies used to be added directly into
-        // `enemies` WHILE an iterator over that same list was still active —
-        // this threw ConcurrentModificationException and crashed the app the
-        // moment a piercing BLUE bullet split an enemy mid-loop. New enemies
-        // are now queued here and merged in only AFTER all loops finish.
-        val pendingSpawns = mutableListOf<EnemyDrone>()
-        val powerups = currentPlay.activePowerUps.toMutableList()
-        val particles = currentPlay.activeParticles.toMutableList()
-
-        var currentScore = currentPlay.score
-        var currentCombo = currentPlay.comboMultiplier
-        var comboTimer = maxOf(0f, currentPlay.comboTimerRemaining - deltaTime)
-        var crystalsCollected = currentPlay.crystalsCollectedThisRun
-        var totalKilled = currentPlay.totalKilledThisRun
-        var wave = currentPlay.currentWave
-        var bossActive = currentPlay.isBossFight
-        var spawnTimer = currentPlay.spawnTimer - deltaTime
-        var ultimateCharge = currentPlay.ultimateCharge
-        val ultimateBeamTimer = maxOf(0f, currentPlay.ultimateBeamTimer - deltaTime)
-
-        if (comboTimer <= 0f) currentCombo = 1
-
-        val pIter = particles.iterator()
-        while (pIter.hasNext()) { val part = pIter.next(); part.update(deltaTime); if (part.runOut) pIter.remove() }
-
-        if ((0..10).random() < 3) {
-            // FIX: equipped trail cosmetic now changes the trail's color
-            // instead of always using the weapon color. "default" keeps the
-            // original weapon-color behavior.
-            val trailColor = when (currentPlay.selectedTrail) {
-                "cyan_fume" -> Color(0xFF00E5FF)
-                "purple_warp" -> Color(0xFFBD00FF)
-                "gold_dust" -> Color(0xFFFFD700)
-                "omega_clon" -> Color(0xFFEEEEEE)
-                else -> when (player.currentWeaponColor) {
-                    EnergyColor.RED -> Color(0xFFFF2E63); EnergyColor.BLUE -> Color(0xFF00ADB5)
-                    EnergyColor.GREEN -> Color(0xFF10B981); EnergyColor.PURPLE -> Color(0xFFBD00FF)
-                }
-            }
-            val trailSize = if (currentPlay.selectedTrail == "gold_dust") (3..7).random().toFloat()
-                             else (6..12).random().toFloat()
-            particles.add(Particle(
-                type = ParticleType.TRAIL,
-                x = player.x + (-20f + kotlin.random.Random.nextFloat() * 40f),
-                y = player.y + 35f,
-                vx = -40f + kotlin.random.Random.nextFloat() * 80f,
-                vy = 150f + kotlin.random.Random.nextFloat() * 150f,
-                size = trailSize,
-                color = trailColor.copy(alpha = 0.65f), maxLife = 0.4f,
-                text = currentPlay.selectedTrail
-            ))
-        }
-
-        val bulletIter = bullets.iterator()
-        while (bulletIter.hasNext()) {
-            val bullet = bulletIter.next()
-            bullet.update(deltaTime)
-            if (bullet.color == EnergyColor.PURPLE && bullet.isFromPlayer) {
-                val target = enemies.minByOrNull { sqrt((it.x - bullet.x)*(it.x - bullet.x) + (it.y - bullet.y)*(it.y - bullet.y)) }
-                if (target != null) {
-                    val angle = atan2(target.y - bullet.y, target.x - bullet.x)
-                    val factor = if (player.selectedShipId == "void_hunter") 12f else 6f
-                    bullet.vx += cos(angle) * 800f * factor * deltaTime
-                    bullet.vy += sin(angle) * 800f * factor * deltaTime
-                    val mag = sqrt(bullet.vx*bullet.vx + bullet.vy*bullet.vy)
-                    if (mag > 0f) { bullet.vx = (bullet.vx/mag)*950f; bullet.vy = (bullet.vy/mag)*950f }
-                }
-            }
-            if (bullet.isOutOfBounds) bulletIter.remove()
-        }
-
-        // FIX: kills-required-for-boss and spawn rate now come from the
-        // per-world definition instead of one fixed value for every world —
-        // this is the main reason every world used to take the same ~10
-        // minutes regardless of which one you picked.
-        val worldDef = GameData.worlds.first { it.index == currentPlay.worldIndex }
-        val worldKillsPerBoss = worldDef.killsRequiredForBoss
-        wave = (1 + totalKilled / 8).coerceAtMost(6)
-
-        if (!bossActive && totalKilled > 0 && totalKilled % worldKillsPerBoss == 0 && enemies.none { it.type == EnemyType.BOSS }) {
-            enemies.add(spawnBoss(currentPlay.worldIndex))
-            bossActive = true
-        } else if (!bossActive && spawnTimer <= 0f && enemies.size < maxConcurrentEnemies) {
-            enemies.add(spawnSingleEnemy(currentPlay.worldIndex, wave))
-            val baseInterval = (1.5f - wave * 0.16f).coerceAtLeast(0.4f)
-            spawnTimer = baseInterval / worldDef.spawnRateMultiplier
-        }
-
-        // ── SHIELD BONUS BOXES ────────────────────────────────────────
-        // 3 boxes spread through the pre-boss phase (at 25%/50%/75% of the
-        // kill count needed to summon the boss) so the player can stock up
-        // on shield charge before the Lightning Strike attacks begin.
-        var shieldBoxesSpawned = currentPlay.shieldBoxesSpawnedCount
-        if (!bossActive) {
-            val killsInCycle = totalKilled % worldKillsPerBoss
-            val nextBoxThreshold = (shieldBoxesSpawned + 1) * (worldKillsPerBoss / 4)
-            if (killsInCycle >= nextBoxThreshold && shieldBoxesSpawned < 3) {
-                powerups.add(PowerUp(
-                    type = PowerUpType.SHIELD,
-                    x = 100f + kotlin.random.Random.nextFloat() * 880f,
-                    y = -40f
-                ))
-                shieldBoxesSpawned++
-            }
-            if (killsInCycle < (worldKillsPerBoss / 4)) shieldBoxesSpawned = 0
-        }
-
-        val enemyIter = enemies.iterator()
-        while (enemyIter.hasNext()) {
-            val enemy = enemyIter.next()
-            enemy.update(deltaTime, 1080f, player.x, currentPlay.worldIndex)
-
-            if (enemy.type == EnemyType.BOSS) {
-                enemy.bossShootingTimer += deltaTime
-                val shootRate = when (enemy.bossPhase) { 4 -> 0.8f; 3 -> 1.2f; 2 -> 1.6f; else -> 2.0f }
-                if (enemy.bossShootingTimer >= shootRate) {
-                    enemy.bossShootingTimer = 0f
-                    val count = if (enemy.bossPhase == 4) 8 else 4
-                    for (i in 0 until count) {
-                        val ang = (i * (2 * Math.PI / count)) + (System.currentTimeMillis() / 400.0)
-                        bullets.add(Projectile(enemy.x, enemy.y + 50f,
-                            cos(ang).toFloat()*350f, sin(ang).toFloat()*350f, enemy.auraColor, false))
-                    }
-                }
-
-                // ── BOSS LIGHTNING STRIKE ────────────────────────────────
-                // Fires exactly 3 times per fight, triggered the moment the
-                // boss's OWN health crosses 70%, 50%, and 20%. A telegraphed
-                // vertical bolt charges for ~1.3s (giving the player a
-                // window to raise shield) then strikes straight down the
-                // boss's column. Shielded = fully absorbed + ultimate charge
-                // bonus. Unshielded = heavy damage.
-                val hpRatio = enemy.hp.toFloat() / enemy.maxHp.toFloat()
-                if (enemy.lightningState == 0) {
-                    val shouldFire = when {
-                        !enemy.hit70 && hpRatio <= 0.70f -> { enemy.hit70 = true; true }
-                        !enemy.hit50 && hpRatio <= 0.50f -> { enemy.hit50 = true; true }
-                        !enemy.hit20 && hpRatio <= 0.20f -> { enemy.hit20 = true; true }
-                        else -> false
-                    }
-                    if (shouldFire) {
-                        enemy.lightningState = 1 // charging / telegraph (bar flickers at boss's y)
-                        enemy.ultimateTimer = 0.5f
-                        enemy.lightningBarY = enemy.y + 110f
-                        enemy.lightningHitApplied = false
-                        SoundSynth.playUiClick()
-                    }
-                } else if (enemy.lightningState == 1) {
-                    enemy.ultimateTimer -= deltaTime
-                    if (enemy.ultimateTimer <= 0f) {
-                        enemy.lightningState = 2 // begin sweeping downward
-                        enemy.ultimateTimer = 0f // now used as elapsed sweep time
-                    }
-                } else if (enemy.lightningState == 2) {
-                    // FINAL DESIGN: a full-width horizontal bar sweeps from
-                    // just below the boss down to the bottom of the screen
-                    // over ~1.6s. Spanning the entire width means moving
-                    // left/right can NEVER dodge it — the only defense is
-                    // raising the shield at the moment it crosses your y.
-                    val sweepDuration = 1.6f
-                    enemy.ultimateTimer += deltaTime
-                    val progress = (enemy.ultimateTimer / sweepDuration).coerceIn(0f, 1f)
-                    val startY = enemy.y + 110f
-                    enemy.lightningBarY = startY + progress * (1920f - startY)
-
-                    if (!enemy.lightningHitApplied && kotlin.math.abs(enemy.lightningBarY - player.y) < 55f) {
-                        enemy.lightningHitApplied = true
-                        if (player.isShieldActive) {
-                            particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                                Color(0xFF00ADB5).copy(alpha = 0.55f), 0.5f))
-                            ultimateCharge = minOf(1f, ultimateCharge + 0.3f)
-                            SoundSynth.playPowerup()
-                        } else {
-                            particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                                Color.Red.copy(alpha = 0.5f), 0.45f))
-                            player.hp = maxOf(0, player.hp - 35)
-                            triggerVibration(getApplication(), 180)
+                        when (event.action) {
+                            MotionEvent.ACTION_DOWN -> {
+                                isDragging = true
+                                lastTouchX = vx; lastTouchY = vy
+                                viewModel.playerShipState.value.targetX = vx.coerceIn(80f, 1000f)
+                                viewModel.playerShipState.value.targetY = vy.coerceIn(200f, 1600f)
+                                true
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                lastTouchX = vx; lastTouchY = vy
+                                viewModel.playerShipState.value.targetX = vx.coerceIn(80f, 1000f)
+                                viewModel.playerShipState.value.targetY = vy.coerceIn(200f, 1600f)
+                                viewModel.fireBulletAt(vx, vy - 300f)
+                                true
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { isDragging = false; true }
+                            else -> false
                         }
                     }
+            ) {
+                Canvas(modifier = Modifier.fillMaxSize().testTag("gameplay_canvas")) {
+                    scale(scaleX, scaleY, pivot = Offset.Zero) {
+                        val spaceWidth = VW
+                        val spaceHeight = VH
 
-                    if (progress >= 1f) enemy.lightningState = 0
-                }
-            } else if ((0..1000).random() < 2 + wave) {
-                bullets.add(Projectile(enemy.x, enemy.y + 35f, 0f, 380f, enemy.auraColor, false))
-            }
+                        // Stars
+                        starsList.forEach { (coord, speedTier) ->
+                            val scrollFactor = 80f * speedTier
+                            val timeFactor = (System.currentTimeMillis() % 1000000) / 1000f
+                            val activeY = (coord.y + timeFactor * scrollFactor) % spaceHeight
+                            val bubbleColor = when (speedTier) {
+                                3 -> Color(0xFF00ADB5).copy(alpha = 0.55f)
+                                2 -> Color(0xFFBD00FF).copy(alpha = 0.42f)
+                                else -> Color.White.copy(alpha = 0.35f)
+                            }
+                            drawCircle(bubbleColor, speedTier.toFloat() * 1.2f, Offset(coord.x, activeY))
+                        }
 
-            if (enemy.y > 1750f) {
-                if (enemy.type != EnemyType.BOSS) {
-                    enemyIter.remove()
-                    if (!player.isInvincible) {
-                        player.hp = maxOf(0, player.hp - 6)
-                        player.invincibilityTimeRemaining = maxOf(player.invincibilityTimeRemaining, 0.2f)
-                        triggerVibration(getApplication(), 50)
-                        particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                            Color.Red.copy(alpha=0.18f), 0.2f))
-                    }
-                } else {
-                    enemy.y = 200f
-                }
-            }
-        }
+                        // Enemies — solid fill so they read clearly
+                        playState.activeEnemies.forEach { enemy ->
+                            val fillCol = enemy.auraColor.composeColor
+                            when (enemy.type) {
+                                EnemyType.PULSE -> {
+                                    val p = Path().apply {
+                                        moveTo(enemy.x, enemy.y - 32f); lineTo(enemy.x + 32f, enemy.y)
+                                        lineTo(enemy.x, enemy.y + 32f); lineTo(enemy.x - 32f, enemy.y); close()
+                                    }
+                                    drawPath(p, fillCol.copy(alpha = 0.75f))
+                                    drawPath(p, fillCol, style = Stroke(width = 4.dp.toPx()))
+                                    drawPath(p, Color.White, style = Stroke(width = 1.5.dp.toPx()))
+                                }
+                                EnemyType.SPLIT -> {
+                                    val hexPath = Path().apply {
+                                        for (i in 0..5) {
+                                            val angle = i * Math.PI / 3.0
+                                            val px = enemy.x + cos(angle).toFloat()*36f
+                                            val py = enemy.y + sin(angle).toFloat()*36f
+                                            if (i == 0) moveTo(px, py) else lineTo(px, py)
+                                        }
+                                        close()
+                                    }
+                                    drawPath(hexPath, fillCol.copy(alpha = 0.55f))
+                                    drawPath(hexPath, fillCol, style = Stroke(width = 4.dp.toPx()))
+                                    drawPath(hexPath, Color.White, style = Stroke(width = 1.dp.toPx()))
+                                }
+                                EnemyType.WARP -> {
+                                    val starPath = Path().apply {
+                                        val numPoints = 6
+                                        for (i in 0 until numPoints * 2) {
+                                            val radius = if (i % 2 == 0) 38f else 18f
+                                            val angle = i * Math.PI / numPoints
+                                            val px = enemy.x + cos(angle).toFloat()*radius
+                                            val py = enemy.y + sin(angle).toFloat()*radius
+                                            if (i == 0) moveTo(px, py) else lineTo(px, py)
+                                        }
+                                        close()
+                                    }
+                                    drawPath(starPath, fillCol.copy(alpha = 0.5f))
+                                    drawPath(starPath, fillCol, style = Stroke(width = 4.dp.toPx()))
+                                    drawPath(starPath, Color.White, style = Stroke(width = 1.dp.toPx()))
+                                }
+                                EnemyType.SHIELD -> {
+                                    drawCircle(fillCol.copy(alpha = 0.45f), 48f, Offset(enemy.x, enemy.y))
+                                    drawCircle(fillCol, 48f, Offset(enemy.x, enemy.y), style = Stroke(width = 4.dp.toPx()))
+                                    val tPulse = (System.currentTimeMillis() % 1000).toFloat() / 1000f
+                                    drawCircle(fillCol.copy(alpha = 1f - tPulse), 32f + tPulse*16f,
+                                        Offset(enemy.x, enemy.y), style = Stroke(width = 1.dp.toPx()))
+                                }
+                                EnemyType.PRISM -> {
+                                    val triPath = Path().apply {
+                                        for (i in 0..2) {
+                                            val angle = (i * 2.0 * Math.PI / 3.0) + Math.toRadians(enemy.rotationAngle.toDouble())
+                                            val px = enemy.x + cos(angle).toFloat()*34f
+                                            val py = enemy.y + sin(angle).toFloat()*34f
+                                            if (i == 0) moveTo(px, py) else lineTo(px, py)
+                                        }
+                                        close()
+                                    }
+                                    drawPath(triPath, fillCol.copy(alpha = 0.5f))
+                                    drawPath(triPath, fillCol, style = Stroke(width = 4.dp.toPx()))
+                                    drawPath(triPath, Color.White, style = Stroke(width = 1.dp.toPx()))
+                                }
+                                EnemyType.BOSS -> {
+                                    drawCircle(fillCol.copy(alpha = 0.1f), 130f, Offset(enemy.x, enemy.y))
+                                    drawCircle(fillCol.copy(alpha = 0.35f), 110f, Offset(enemy.x, enemy.y))
+                                    drawCircle(fillCol, 110f, Offset(enemy.x, enemy.y), style = Stroke(width = 5.dp.toPx()))
+                                    drawCircle(Color.White, 80f, Offset(enemy.x, enemy.y), style = Stroke(width = 1.dp.toPx()))
+                                    for (i in 0..7) {
+                                        val angle = (i * Math.PI / 4.0) + Math.toRadians(enemy.rotationAngle.toDouble())
+                                        val px1 = enemy.x + cos(angle).toFloat()*80f
+                                        val py1 = enemy.y + sin(angle).toFloat()*80f
+                                        val px2 = enemy.x + cos(angle).toFloat()*110f
+                                        val py2 = enemy.y + sin(angle).toFloat()*110f
+                                        drawLine(fillCol, Offset(px1, py1), Offset(px2, py2), 3.dp.toPx())
+                                    }
 
-        // Any hit destroys any enemy — color no longer required.
-        val bIter = bullets.iterator()
-        while (bIter.hasNext()) {
-            val bullet = bIter.next()
-            if (!bullet.isFromPlayer) continue
-            var bulletConsumed = false
-            val eIter = enemies.iterator()
-            while (eIter.hasNext()) {
-                val enemy = eIter.next()
-                val dx = bullet.x - enemy.x; val dy = bullet.y - enemy.y
-                val dist = sqrt(dx*dx + dy*dy)
-                val rangeRadius = if (enemy.type == EnemyType.BOSS) 150f else 50f
-                if (dist < rangeRadius) {
-                    enemy.hp--
-                    SoundSynth.playHitCorrect()
-                    for (i in 0..12) {
-                        particles.add(Particle(
-                            type = ParticleType.EXPLOSION, x = enemy.x, y = enemy.y,
-                            vx = -250f + kotlin.random.Random.nextFloat()*500f,
-                            vy = -250f + kotlin.random.Random.nextFloat()*500f,
-                            size = (8..22).random().toFloat(),
-                            color = enemy.auraColor.composeColor, maxLife = 0.45f
-                        ))
-                    }
+                                    // NOTE: the Lightning Strike bolt itself is no
+                                    // longer drawn here — see the dedicated unscaled
+                                    // BeamOverlayCanvas below, which avoids distortion
+                                    // from this block's non-uniform scale() transform.
+                                }
+                            }
+                        }
 
-                    // PURPLE Void Bomb: splash-damages any other nearby
-                    // enemy on impact (small AOE), with a purple shockwave.
-                    if (bullet.color == EnergyColor.PURPLE) {
-                        particles.add(Particle(ParticleType.SHOCKWAVE, enemy.x, enemy.y, 0f, 0f, 0f,
-                            Color(0xFFBD00FF), 0.35f))
-                        enemies.forEach { other ->
-                            if (other.id != enemy.id) {
-                                val odx = other.x - enemy.x; val ody = other.y - enemy.y
-                                if (sqrt(odx*odx + ody*ody) < 90f) {
-                                    other.hp--
-                                    for (i in 0..5) {
-                                        particles.add(Particle(
-                                            type = ParticleType.EXPLOSION, x = other.x, y = other.y,
-                                            vx = -150f + kotlin.random.Random.nextFloat()*300f,
-                                            vy = -150f + kotlin.random.Random.nextFloat()*300f,
-                                            size = 10f, color = Color(0xFFBD00FF), maxLife = 0.35f
-                                        ))
+                        // Bullets
+                        playState.activeBullets.forEach { bullet ->
+                            val beamColor = bullet.color.composeColor
+                            if (bullet.color == EnergyColor.BLUE) {
+                                // Lightning Pierce: crackling jagged bolt instead of a clean line
+                                val jx1 = bullet.x + (kotlin.random.Random.nextFloat()-0.5f)*10f
+                                val jx2 = bullet.x + (kotlin.random.Random.nextFloat()-0.5f)*10f
+                                val path = Path().apply {
+                                    moveTo(bullet.x, bullet.y + 26f)
+                                    lineTo(jx1, bullet.y + 8f)
+                                    lineTo(jx2, bullet.y - 8f)
+                                    lineTo(bullet.x, bullet.y - 26f)
+                                }
+                                drawPath(path, beamColor.copy(alpha = 0.4f), style = Stroke(width = 14f))
+                                drawPath(path, beamColor, style = Stroke(width = 6f))
+                                drawPath(path, Color.White, style = Stroke(width = 2.5f))
+                            } else if (bullet.color == EnergyColor.PURPLE) {
+                                // Void Bomb: pulsing orb
+                                drawCircle(beamColor.copy(alpha = 0.3f), 16f, Offset(bullet.x, bullet.y))
+                                drawCircle(beamColor, 9f, Offset(bullet.x, bullet.y))
+                                drawCircle(Color.White, 4f, Offset(bullet.x, bullet.y))
+                            } else {
+                                val beamSize = 6f
+                                drawLine(beamColor.copy(alpha = 0.35f), Offset(bullet.x, bullet.y+15f), Offset(bullet.x, bullet.y-15f), beamSize*2.5f)
+                                drawLine(beamColor, Offset(bullet.x, bullet.y+12f), Offset(bullet.x, bullet.y-12f), beamSize)
+                                drawLine(Color.White, Offset(bullet.x, bullet.y+6f), Offset(bullet.x, bullet.y-6f), beamSize*0.4f)
+                            }
+                        }
+
+                        // Shield bonus boxes
+                        playState.activePowerUps.forEach { pu ->
+                            val pulse = (sin(System.currentTimeMillis() % 1000 / 1000f * 2 * Math.PI).toFloat() * 0.15f + 0.85f)
+                            rotate(pu.angle, Offset(pu.x, pu.y)) {
+                                drawRect(Color(0xFF00ADB5).copy(alpha = 0.25f * pulse),
+                                    Offset(pu.x - 24f, pu.y - 24f), Size(48f, 48f))
+                                drawRect(Color(0xFF00ADB5), Offset(pu.x - 24f, pu.y - 24f), Size(48f, 48f),
+                                    style = Stroke(width = 3.dp.toPx()))
+                            }
+                            drawContext.canvas.nativeCanvas.drawText("🛡", pu.x, pu.y + 10f,
+                                android.graphics.Paint().apply {
+                                    textSize = 30f; textAlign = android.graphics.Paint.Align.CENTER
+                                })
+                        }
+
+                        // Player ship
+                        drawCircle(Color.White.copy(alpha = 0.12f), 70f, Offset(playerShip.x, playerShip.y))
+                        drawProceduralShip(playerShip.selectedShipId, Offset(playerShip.x, playerShip.y), 110f,
+                            playerShip.currentWeaponColor.composeColor)
+
+                        if (playerShip.isShieldActive) {
+                            val tCycle = (System.currentTimeMillis() % 600) / 600f
+                            val shieldColor = playerShip.currentWeaponColor.composeColor
+                            drawCircle(shieldColor.copy(alpha = 0.2f), 90f, Offset(playerShip.x, playerShip.y))
+                            drawCircle(shieldColor.copy(alpha = 1f - tCycle), 80f + tCycle*18f,
+                                Offset(playerShip.x, playerShip.y), style = Stroke(width = 2.dp.toPx()))
+                        }
+
+                        // Particles
+                        playState.activeParticles.forEach { part ->
+                            when (part.type) {
+                                ParticleType.EXPLOSION -> {
+                                    // pixel_shrapnel cosmetic: square shards instead of circles
+                                    if (part.color == Color(0xFFFBBF24) && playState.selectedExplosion == "pixel_shrapnel") {
+                                        val s = part.size * 1.1f * (part.life/part.maxLife)
+                                        drawRect(part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
+                                            Offset(part.x - s/2f, part.y - s/2f), Size(s, s))
+                                    } else {
+                                        drawCircle(
+                                            part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
+                                            part.size*1.3f*(part.life/part.maxLife), Offset(part.x, part.y))
                                     }
                                 }
-                            }
-                        }
-                    }
-
-                    if (enemy.hp <= 0) {
-                        eIter.remove()
-                        totalKilled++
-                        ultimateCharge = minOf(1f, ultimateCharge + 1f / 12f)
-
-                        // FIX: equipped explosion cosmetic now actually changes
-                        // what plays on a confirmed kill — previously this was
-                        // bought but never read anywhere. "default" keeps the
-                        // small per-hit burst above as the only effect; the
-                        // others add a distinct extra burst on the kill itself.
-                        when (currentPlay.selectedExplosion) {
-                            "cosmic_ring" -> particles.add(Particle(
-                                ParticleType.SHOCKWAVE, enemy.x, enemy.y, 0f, 0f, 0f,
-                                Color(0xFF00ADB5), 0.5f))
-                            "pixel_shrapnel" -> {
-                                for (i in 0..9) {
-                                    particles.add(Particle(
-                                        type = ParticleType.EXPLOSION, x = enemy.x, y = enemy.y,
-                                        vx = -300f + kotlin.random.Random.nextFloat()*600f,
-                                        vy = -300f + kotlin.random.Random.nextFloat()*600f,
-                                        size = 14f, color = Color(0xFFFBBF24), maxLife = 0.5f
-                                    ))
+                                ParticleType.TRAIL -> {
+                                    // gold_dust cosmetic: tiny sparkle cross instead of a soft circle
+                                    if (part.text == "gold_dust") {
+                                        val a = (part.life/part.maxLife)
+                                        val s = part.size * a * 2.2f
+                                        drawLine(part.color.copy(alpha = a), Offset(part.x - s, part.y), Offset(part.x + s, part.y), 2f)
+                                        drawLine(part.color.copy(alpha = a), Offset(part.x, part.y - s), Offset(part.x, part.y + s), 2f)
+                                    } else if (part.text == "purple_warp") {
+                                        drawCircle(part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
+                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y),
+                                            style = Stroke(width = 2f))
+                                    } else {
+                                        drawCircle(
+                                            part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
+                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y))
+                                    }
+                                }
+                                ParticleType.SHOCKWAVE -> {
+                                    val fraction = 1.0f - (part.life/part.maxLife)
+                                    drawCircle(part.color.copy(alpha=(part.life/part.maxLife)*0.8f),
+                                        40f+fraction*180f, Offset(part.x, part.y), style = Stroke(width = 3.dp.toPx()))
+                                }
+                                ParticleType.SCREEN_FLASH -> drawRect(
+                                    part.color.copy(alpha=(part.life/part.maxLife)*0.3f), size = Size(spaceWidth, spaceHeight))
+                                ParticleType.LIGHTNING_LINK -> {
+                                    val a = (part.life / part.maxLife).coerceIn(0f, 1f)
+                                    val midX = (part.x + part.targetX) / 2f + (kotlin.random.Random.nextFloat()-0.5f)*30f
+                                    val midY = (part.y + part.targetY) / 2f + (kotlin.random.Random.nextFloat()-0.5f)*30f
+                                    val path = Path().apply {
+                                        moveTo(part.x, part.y)
+                                        lineTo(midX, midY)
+                                        lineTo(part.targetX, part.targetY)
+                                    }
+                                    drawPath(path, part.color.copy(alpha = a * 0.4f), style = Stroke(width = 14f))
+                                    drawPath(path, part.color.copy(alpha = a), style = Stroke(width = 5f))
+                                    drawPath(path, Color.White.copy(alpha = a), style = Stroke(width = 2f))
+                                }
+                                else -> drawContext.canvas.nativeCanvas.apply {
+                                    val paint = android.graphics.Paint().apply {
+                                        color = android.graphics.Color.YELLOW; textSize = part.size
+                                        style = android.graphics.Paint.Style.FILL
+                                        textAlign = android.graphics.Paint.Align.CENTER; isFakeBoldText = true
+                                    }
+                                    drawText(part.text, part.x, part.y, paint)
                                 }
                             }
-                            "chroma_flicker" -> particles.add(Particle(
-                                ParticleType.SCREEN_FLASH, 0f, 0f, 0f, 0f, 0f,
-                                Color(0xFFBD00FF).copy(alpha = 0.22f), 0.25f))
                         }
 
-                        if (enemy.type == EnemyType.SPLIT) {
-                            // FIX: queue instead of adding directly to `enemies`
-                            pendingSpawns.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x-40f, y = enemy.y,
-                                vx = -120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
-                            pendingSpawns.add(EnemyDrone(type = EnemyType.PULSE, x = enemy.x+40f, y = enemy.y,
-                                vx = 120f, vy = enemy.vy*1.1f, hp=1, maxHp=1, auraColor = enemy.auraColor))
-                        } else if (enemy.type == EnemyType.BOSS) {
-                            bossActive = false
-                            SoundSynth.playBossDie()
-                            viewModelScope.launch { triggerAchievementProgress("boss", 1) }
-                            registerMissionProgress(3, 1)
-                            crystalsCollected += 200
-                            currentScore += 5000
-                        }
-
-                        val rewardBase = when (enemy.type) {
-                            EnemyType.PULSE -> 100; EnemyType.SPLIT -> 150; EnemyType.WARP -> 200
-                            EnemyType.SHIELD -> 300; EnemyType.PRISM -> 400; EnemyType.BOSS -> 5000
-                        }
-                        currentScore += rewardBase * currentCombo
-                        crystalsCollected += 2 * currentCombo
-                        currentCombo = minOf(5, currentCombo + 1)
-                        comboTimer = 2.5f
-                        viewModelScope.launch { triggerAchievementProgress("combo", currentCombo) }
-
-                        if (currentCombo > 1) {
-                            particles.add(Particle(type = ParticleType.TEXT, x = enemy.x, y = enemy.y-30f,
-                                vx = 0f, vy = -180f, size = 32f, color = Color(0xFFFBBF24),
-                                maxLife = 0.55f, text = "${currentCombo}x COMBO!"))
+                        if (isDragging) {
+                            val col = playerShip.currentWeaponColor.composeColor
+                            drawCircle(col.copy(alpha = 0.15f), 35f, Offset(lastTouchX, lastTouchY))
+                            drawCircle(col.copy(alpha = 0.4f), 35f, Offset(lastTouchX, lastTouchY), style = Stroke(width = 2f))
                         }
                     }
-                    bulletConsumed = true
-                    if (bullet.color != EnergyColor.BLUE) break
                 }
-            }
-            if (bulletConsumed && bullet.color != EnergyColor.BLUE) bIter.remove()
-        }
 
-        // FIX: merge queued SPLIT spawns now that all iteration is finished
-        enemies.addAll(pendingSpawns)
+                // ════════════ DEDICATED UNSCALED BEAM OVERLAY ════════════
+                // Both the boss's Lightning Strike and the ship's Electric
+                // Wave ultimate are drawn here, on a plain Canvas with NO
+                // scale() transform applied. Virtual-space coordinates are
+                // converted to real screen pixels manually (multiplying by
+                // scaleX/scaleY) before drawing, and all stroke widths are
+                // specified in raw pixels. This guarantees both beams always
+                // render as clean, undistorted VERTICAL lines (top-to-bottom)
+                // on every device, regardless of aspect ratio — the previous
+                // approach of drawing them inside the non-uniform scale()
+                // block could visually squash a tall thin line into
+                // something that read as horizontal on some screens.
+                Canvas(modifier = Modifier.fillMaxSize().testTag("beam_overlay_canvas")) {
+                    // Boss Lightning Strike — FINAL DESIGN: a full-width
+                    // HORIZONTAL glowing bar that sweeps DOWNWARD over time,
+                    // exactly like a horizontal scanning laser. It spans the
+                    // entire screen width, so left/right movement can never
+                    // dodge it — only the shield blocks it. Red-mixed glow
+                    // (white core, red/orange outer) matching the reference
+                    // "Moving Electric Strike" effect.
+                    playState.activeEnemies.forEach { enemy ->
+                        if (enemy.type == EnemyType.BOSS && enemy.lightningState != 0) {
+                            val realBarY = enemy.lightningBarY * scaleY
+                            val flicker = when {
+                                enemy.lightningState == 1 ->
+                                    if ((System.currentTimeMillis() / 80) % 2 == 0L) 0.85f else 0.35f
+                                else -> 0.9f + 0.1f * kotlin.random.Random.nextFloat()
+                            }
+                            val barHeight = if (enemy.lightningState == 1) 5f else 9f
 
-        val enemyBIter = bullets.iterator()
-        while (enemyBIter.hasNext()) {
-            val b = enemyBIter.next()
-            if (b.isFromPlayer) continue
-            val dx = b.x - player.x; val dy = b.y - player.y
-            if (sqrt(dx*dx+dy*dy) < 60f) {
-                enemyBIter.remove()
-                if (!player.isInvincible) {
-                    player.hp = maxOf(0, player.hp - 8)
-                    triggerVibration(getApplication(), 70)
-                    particles.add(Particle(ParticleType.SCREEN_FLASH, 0f,0f,0f,0f,0f,
-                        Color.Red.copy(alpha=0.2f), 0.2f))
-                }
-            }
-        }
-
-        val puIter = powerups.iterator()
-        while (puIter.hasNext()) {
-            val pu = puIter.next()
-            pu.update(deltaTime)
-            if (pu.y > 2000f) { puIter.remove(); continue }
-            val dx = pu.x - player.x; val dy = pu.y - player.y
-            if (sqrt(dx*dx+dy*dy) < 60f) {
-                puIter.remove()
-                when (pu.type) {
-                    PowerUpType.SHIELD -> {
-                        // FIX: additive stock instead of force-filling the
-                        // regen bar — base passive regen is untouched, this
-                        // just stacks an extra ready-to-use charge on top.
-                        player.shieldStock += 1
-                        particles.add(Particle(ParticleType.SHOCKWAVE, pu.x, pu.y, 0f, 0f, 0f,
-                            Color(0xFF00ADB5), 0.4f))
+                            // Outer wide glow
+                            drawRect(
+                                color = Color(0xFFFF3344).copy(alpha = flicker * 0.35f),
+                                topLeft = Offset(0f, realBarY - barHeight * 4f),
+                                size = Size(realWpx, barHeight * 8f)
+                            )
+                            // Mid glow band
+                            drawRect(
+                                color = Color(0xFFFF6600).copy(alpha = flicker * 0.6f),
+                                topLeft = Offset(0f, realBarY - barHeight * 1.6f),
+                                size = Size(realWpx, barHeight * 3.2f)
+                            )
+                            // Bright core line
+                            drawRect(
+                                color = Color.White.copy(alpha = flicker),
+                                topLeft = Offset(0f, realBarY - barHeight / 2f),
+                                size = Size(realWpx, barHeight)
+                            )
+                            // A few bright sparks along the bar for extra "electric" feel
+                            if (enemy.lightningState == 2) {
+                                repeat(6) {
+                                    val sx = kotlin.random.Random.nextFloat() * realWpx
+                                    drawCircle(Color.White.copy(alpha = 0.8f), 3f, Offset(sx, realBarY))
+                                }
+                            }
+                        }
                     }
-                    else -> crystalsCollected += 20
+
+                    // Ship's Electric Wave ultimate — blue-mixed, vertical,
+                    // straight up from the ship to the top of the screen
+                    if (playState.ultimateBeamTimer > 0f) {
+                        val realX = playerShip.x * scaleX
+                        val realStartY = playerShip.y * scaleY
+                        val segs = 12
+                        val path = Path()
+                        var cx = realX; var cy = realStartY
+                        path.moveTo(cx, cy)
+                        val segLen = realStartY / segs
+                        for (s in 1..segs) {
+                            cx = realX + (kotlin.random.Random.nextFloat() - 0.5f) * 40f
+                            cy = realStartY - segLen * s
+                            path.lineTo(cx, cy)
+                        }
+                        val a = (playState.ultimateBeamTimer / 0.45f).coerceIn(0f, 1f)
+                        drawPath(path, Color(0xFF0066FF).copy(alpha = 0.4f * a), style = Stroke(width = 28f))
+                        drawPath(path, Color(0xFF00BFFF).copy(alpha = a), style = Stroke(width = 12f))
+                        drawPath(path, Color.White.copy(alpha = a), style = Stroke(width = 4f))
+                    }
                 }
-                SoundSynth.playPowerup()
-            }
-        }
 
-        // FIX: always reassign via .copy() so the PlayerShip StateFlow
-        // genuinely emits a new value every single frame — this is what was
-        // making the shield arc/charge UI look frozen or inconsistent.
-        player = player.copy()
-
-        if (player.hp <= 0) {
-            gameplayState.value = currentPlay.copy(gameEnded = true)
-            playerShipState.value = player
-            saveGameStatsAndEnd(currentPlay.worldIndex, currentScore, crystalsCollected, totalKilled, 0, 0, false)
-            return
-        }
-
-        if (!bossActive && currentPlay.isBossFight) {
-            gameplayState.value = currentPlay.copy(levelComplete = true)
-            playerShipState.value = player
-            saveGameStatsAndEnd(currentPlay.worldIndex, currentScore, crystalsCollected, totalKilled, 1, 0, true)
-            return
-        }
-
-        playerShipState.value = player
-        gameplayState.value = currentPlay.copy(
-            score = currentScore,
-            comboMultiplier = currentCombo,
-            comboTimerRemaining = comboTimer,
-            crystalsCollectedThisRun = crystalsCollected,
-            activeBullets = bullets,
-            activeEnemies = enemies,
-            activePowerUps = powerups,
-            activeParticles = particles,
-            totalKilledThisRun = totalKilled,
-            currentWave = wave,
-            isBossFight = bossActive,
-            spawnTimer = spawnTimer,
-            ultimateCharge = ultimateCharge,
-            shieldBoxesSpawnedCount = shieldBoxesSpawned,
-            ultimateBeamTimer = ultimateBeamTimer
-        )
-    }
-
-    private fun saveGameStatsAndEnd(worldIndex: Int, score: Int, crystals: Int, rawKilled: Int, bossesKilled: Int, strikes: Int, complete: Boolean) {
-        viewModelScope.launch {
-            if (complete) {
-                if (worldIndex < 6) repository.unlockWorld(worldIndex + 1)
-                if (worldIndex == 6) triggerAchievementProgress("world", 6)
-                triggerAchievementProgress("hits", 1)
-                registerMissionProgress(5, 1)
-            }
-            // completeRun() internally compares against the saved high score
-            // and only overwrites it if this run's score is higher — true
-            // "best score" semantics, not a running total.
-            repository.completeRun(worldId = worldIndex, score = score, crystalsEarned = crystals,
-                rawEnemies = rawKilled, bosssKilled = bossesKilled)
-            registerMissionProgress(2, score)
-            registerMissionProgress(6, rawKilled)
-            registerMissionProgress(7, score)
-            if (complete && worldIndex == 6) unlockSpecialShip("crystal_titan")
-        }
-    }
-
-    private suspend fun unlockSpecialShip(shipId: String) {
-        // FIX: routed through updateAtomic — was an unguarded read-modify-write
-        // that could race against completeRun() and silently lose data.
-        var didUnlock = false
-        repository.updateAtomic { progress ->
-            val unlockedList = progress.getUnlockedShips().toMutableList()
-            if (!unlockedList.contains(shipId)) {
-                unlockedList.add(shipId)
-                didUnlock = true
-                progress.copy(unlockedShipsStr = unlockedList.joinToString(","))
-            } else {
-                progress
-            }
-        }
-        if (didUnlock) SoundSynth.playPowerup()
-    }
-
-    fun buyShip(shipId: String, cost: Int) {
-        viewModelScope.launch {
-            val progress = userProgress.value ?: return@launch
-            if (progress.crystals >= cost) {
-                if (repository.unlockShip(shipId, cost)) SoundSynth.playPowerup()
-            } else SoundSynth.playHitWrong()
-        }
-    }
-
-    fun selectShip(shipId: String) { viewModelScope.launch { repository.selectShip(shipId) } }
-
-    // ── COSMETICS: trails & explosions ──────────────────────────────
-    // FIX: these are the real purchase/equip functions. The shop previously
-    // called buyShip("aesthetic_dummy", cost) which deducted crystals but
-    // never recorded which trail/explosion was bought, and nothing in
-    // gameplay ever read it — purchases were completely disconnected from
-    // what you saw in-game.
-    fun buyTrail(trailId: String, cost: Int) {
-        viewModelScope.launch {
-            val progress = userProgress.value ?: return@launch
-            if (progress.crystals >= cost) {
-                if (repository.unlockTrail(trailId, cost)) {
-                    SoundSynth.playPowerup()
-                    repository.selectTrail(trailId) // auto-equip on purchase
+                // ── TOP HUD ──
+                Row(
+                    modifier = Modifier.fillMaxWidth().statusBarsPadding()
+                        .padding(horizontal = 14.dp, vertical = 6.dp).testTag("gameplay_hud"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(modifier = Modifier.width(130.dp)) {
+                        val ratio = playerShip.hp.toFloat() / playerShip.maxHp.toFloat()
+                        val progressColor = when { ratio>0.6f -> Color(0xFF10B981); ratio>0.3f -> Color(0xFFFBBF24); else -> Color(0xFFFF2E63) }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("❤️ ", fontSize = 11.sp)
+                            Text("HP: ${playerShip.hp}/${playerShip.maxHp}", color = Color.White, fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp))
+                            .background(Color(0xFF10101C)).border(1.dp, Color.Gray.copy(alpha=0.2f), RoundedCornerShape(4.dp))) {
+                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(ratio.coerceIn(0f,1f)).background(progressColor))
+                        }
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("${playState.score}", fontSize = 24.sp, fontWeight = FontWeight.Black,
+                            color = Color.White, fontFamily = FontFamily.Monospace)
+                        Text("WAVE ${playState.currentWave}  •  KILLS ${playState.totalKilledThisRun}",
+                            fontSize = 10.sp, color = Color.LightGray, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        if (playState.comboMultiplier > 1) {
+                            Text("${playState.comboMultiplier}X COMBO", color = Color(0xFFFBBF24), fontSize = 13.sp,
+                                fontWeight = FontWeight.Black, fontFamily = FontFamily.Monospace)
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("💎 ${playState.crystalsCollectedThisRun}", fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                            color = Color(0xFF00ADB5), fontFamily = FontFamily.Monospace)
+                        Box(contentAlignment = Alignment.Center,
+                            modifier = Modifier.testTag("pause_game_button").size(48.dp).clip(CircleShape)
+                                .background(Color(0xFF1F1F35).copy(alpha=0.9f))
+                                .border(1.5.dp, Color.White.copy(alpha=0.4f), CircleShape)
+                                .clickable { isPaused = true }
+                        ) { Text("⏸", color = Color.White, fontSize = 16.sp) }
+                    }
                 }
-            } else SoundSynth.playHitWrong()
-        }
-    }
 
-    fun buyExplosion(explosionId: String, cost: Int) {
-        viewModelScope.launch {
-            val progress = userProgress.value ?: return@launch
-            if (progress.crystals >= cost) {
-                if (repository.unlockExplosion(explosionId, cost)) {
-                    SoundSynth.playPowerup()
-                    repository.selectExplosion(explosionId) // auto-equip on purchase
+                if (playState.isBossFight && playState.activeEnemies.any { it.type == EnemyType.BOSS }) {
+                    val bossObj = playState.activeEnemies.first { it.type == EnemyType.BOSS }
+                    val hpRatio = bossObj.hp.toFloat() / bossObj.maxHp.toFloat()
+                    Column(modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter)
+                        .padding(top = 100.dp, start = 20.dp, end = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("⚠️ BOSS ACTIVE - PHASE ${bossObj.bossPhase}", color = Color(0xFFFF2E63),
+                            fontSize = 11.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(10.dp).clip(RoundedCornerShape(5.dp))
+                            .background(Color.Black.copy(alpha=0.6f)).border(1.5.dp, Color(0xFFFF2E63), RoundedCornerShape(5.dp))) {
+                            Box(modifier = Modifier.fillMaxHeight().fillMaxWidth(hpRatio.coerceIn(0f,1f)).background(Color(0xFFFF2E63)))
+                        }
+                    }
                 }
-            } else SoundSynth.playHitWrong()
-        }
-    }
 
-    fun selectTrail(trailId: String) {
-        viewModelScope.launch { repository.selectTrail(trailId); SoundSynth.playUiClick() }
-    }
-
-    fun selectExplosion(explosionId: String) {
-        viewModelScope.launch { repository.selectExplosion(explosionId); SoundSynth.playUiClick() }
-    }
-
-    fun toggleSounds(sound: Boolean, music: Boolean, vibration: Boolean) {
-        viewModelScope.launch { repository.updateSettings(sound, music, vibration) }
-    }
-
-    fun resetAllProfileData() {
-        viewModelScope.launch { repository.resetAllData(); SoundSynth.playHitWrong() }
-    }
-
-    private fun spawnCustomParticles(px: Float, py: Float, col: Color, type: ParticleType, message: String = "") {
-        val state = gameplayState.value
-        val list = state.activeParticles.toMutableList()
-        list.add(Particle(type, px, py, 0f, -120f, 26f, col, 0.7f, text = message))
-        gameplayState.value = state.copy(activeParticles = list)
-    }
-
-    private suspend fun triggerAchievementProgress(type: String, currentValue: Int) {
-        // FIX: routed through updateAtomic — this used to be called on
-        // literally every kill during gameplay (combo/boss checks), each one
-        // an unguarded read-modify-write racing against completeRun()'s high
-        // score save. That race is exactly what caused recorded scores to
-        // intermittently revert to 0 / not update until a later run.
-        var newlyUnlockedCount = 0
-        var totalUnlockedCount = 0
-        repository.updateAtomic { progress ->
-            val unlocked = progress.getUnlockedAchievements().toMutableList()
-            var crystalsToAdd = 0
-            GameData.achievements.forEach { ach ->
-                if (!unlocked.contains(ach.id) && ach.type == type && currentValue >= ach.target) {
-                    unlocked.add(ach.id)
-                    crystalsToAdd += ach.rewardCrystals
-                    newlyUnlockedCount++
+                // ── OVERLAYS ──
+                if (isPaused) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.75f))
+                        .clickable { isPaused = false }, contentAlignment = Alignment.Center) {
+                        NeonCard(borderColor = Color(0xFF00ADB5), modifier = Modifier.fillMaxWidth(0.85f).clickable(enabled=false){}) {
+                            Text("⏸ PAUSED", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color.White,
+                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(20.dp))
+                            NeonButton("RESUME", onClick = { isPaused = false }, buttonColor = Color(0xFF10B981),
+                                vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(10.dp))
+                            NeonButton("RESTART", onClick = { isPaused = false; viewModel.selectWorldAndStart(playState.worldIndex) },
+                                buttonColor = Color(0xFF3B82F6), vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(10.dp))
+                            NeonButton("MAIN MENU", onClick = { isPaused = false; viewModel.changeScreen(GameScreen.WORLD_SELECT) },
+                                buttonColor = Color(0xFFFF2E63), vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
                 }
-            }
-            totalUnlockedCount = unlocked.size
-            if (crystalsToAdd > 0) {
-                progress.copy(
-                    crystals = progress.crystals + crystalsToAdd,
-                    achievementsUnlockedStr = unlocked.joinToString(",")
-                )
-            } else {
-                progress
-            }
-        }
-        if (newlyUnlockedCount > 0) {
-            SoundSynth.playPowerup()
-            if (totalUnlockedCount >= GameData.achievements.size - 1) unlockSpecialShip("omega_specter")
-        }
-    }
 
-    private fun registerMissionProgress(missionId: Int, amt: Int) {
-        viewModelScope.launch {
-            // FIX: routed through updateAtomic — was an unguarded
-            // read-modify-write, fired on nearly every kill, that could race
-            // against the high-score save and silently overwrite it.
-            val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-            repository.updateAtomic { progress ->
-                val progMap = progress.getMissionsProgress().toMutableMap()
-                val originalVal = progMap[missionId] ?: 0
-                if (originalVal < targetMission.target) {
-                    val newVal = if (missionId == 2) maxOf(originalVal, amt) else originalVal + amt
-                    progMap[missionId] = minOf(targetMission.target, newVal)
-                    progress.copy(missionsProgressStr = UserProgress.buildMissionsProgressStr(progMap))
-                } else {
-                    progress
+                if (playState.levelComplete) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.85f)), contentAlignment = Alignment.Center) {
+                        NeonCard(borderColor = Color(0xFFFBBF24), modifier = Modifier.fillMaxWidth(0.88f)) {
+                            Text("🛰️ PORTAL CLEARED!", fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFBBF24),
+                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(14.dp)); HorizontalDivider(color = Color(0xFFFBBF24).copy(alpha=0.3f)); Spacer(Modifier.height(14.dp))
+                            Text("${playState.score}", fontSize = 28.sp, fontWeight = FontWeight.Black, color = Color.White,
+                                fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(6.dp))
+                            Text("💎 ${playState.crystalsCollectedThisRun}", fontSize = 16.sp, fontWeight = FontWeight.Bold,
+                                color = Color(0xFF00ADB5), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom=14.dp))
+                            NeonButton("NEXT GALAXY", onClick = { viewModel.changeScreen(GameScreen.WORLD_SELECT) },
+                                buttonColor = Color(0xFF10B981), vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(8.dp))
+                            NeonButton("MAIN MENU", onClick = { viewModel.changeScreen(GameScreen.MAIN_MENU) },
+                                buttonColor = Color.LightGray, vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+
+                if (playState.gameEnded) {
+                    Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha=0.85f)), contentAlignment = Alignment.Center) {
+                        NeonCard(borderColor = Color(0xFFFF2E63), modifier = Modifier.fillMaxWidth(0.85f)) {
+                            Text("GAME OVER", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = Color(0xFFFF2E63),
+                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(14.dp)); HorizontalDivider(color = Color(0xFFFF2E63).copy(alpha=0.3f)); Spacer(Modifier.height(14.dp))
+                            Text("FINAL SCORE", fontSize = 11.sp, color = Color.LightGray, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+                            Text("${playState.score}", fontSize = 32.sp, fontWeight = FontWeight.Black, color = Color.White,
+                                fontFamily = FontFamily.Monospace, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom=12.dp))
+                            Text("💎 ${playState.crystalsCollectedThisRun} crystals\nKills: ${playState.totalKilledThisRun}",
+                                fontSize = 13.sp, color = Color.LightGray, textAlign = TextAlign.Center, lineHeight = 18.sp,
+                                modifier = Modifier.fillMaxWidth().padding(bottom=20.dp))
+                            NeonButton("RETRY", onClick = { viewModel.selectWorldAndStart(playState.worldIndex) },
+                                buttonColor = Color(0xFF00ADB5), vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                            Spacer(Modifier.height(10.dp))
+                            NeonButton("MAIN MENU", onClick = { viewModel.changeScreen(GameScreen.MAIN_MENU) },
+                                buttonColor = Color.LightGray, vibrationEnabled = vibrationEnabled, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
                 }
             }
         }
-    }
 
-    fun claimMissionReward(missionId: Int) {
-        viewModelScope.launch {
-            // FIX: routed through updateAtomic for the same reason as above.
-            val targetMission = GameData.missions.firstOrNull { it.id == missionId } ?: return@launch
-            var claimed = false
-            repository.updateAtomic { progress ->
-                val progressMap = progress.getMissionsProgress()
-                val currentProgress = progressMap[missionId] ?: 0
-                if (currentProgress >= targetMission.target) {
-                    val mutableProgress = progressMap.toMutableMap()
-                    mutableProgress[missionId] = 0
-                    claimed = true
-                    progress.copy(
-                        crystals = progress.crystals + targetMission.rewardCrystals,
-                        missionsProgressStr = UserProgress.buildMissionsProgressStr(mutableProgress)
+        // ════════════════════ DEDICATED CONTROL BAR (separate from gameplay touch) ════════════════════
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(CONTROL_BAR_HEIGHT)
+                .background(Color(0xFF0A0A14))
+                .border(width = 1.dp, color = Color.White.copy(alpha = 0.08f))
+                .navigationBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Color wheel — 4 dots, bigger reliable targets
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                ColorDotItem(EnergyColor.RED, playerShip.currentWeaponColor == EnergyColor.RED) { viewModel.switchWeaponColor(EnergyColor.RED) }
+                ColorDotItem(EnergyColor.BLUE, playerShip.currentWeaponColor == EnergyColor.BLUE) { viewModel.switchWeaponColor(EnergyColor.BLUE) }
+                ColorDotItem(EnergyColor.GREEN, playerShip.currentWeaponColor == EnergyColor.GREEN) { viewModel.switchWeaponColor(EnergyColor.GREEN) }
+                ColorDotItem(EnergyColor.PURPLE, playerShip.currentWeaponColor == EnergyColor.PURPLE) { viewModel.switchWeaponColor(EnergyColor.PURPLE) }
+            }
+
+            // ⚡ ELECTRIC WAVE ultimate — charges from kills, destroys ~50%
+            // of on-screen enemies when full.
+            Box(contentAlignment = Alignment.Center,
+                modifier = Modifier.testTag("ultimate_button").size(56.dp).clip(CircleShape)
+                    .background(Color(0xFF10111F).copy(alpha = 0.95f))
+                    .border(1.5.dp, Color(0xFF00E5FF).copy(alpha = 0.4f), CircleShape)
+                    .clickable(enabled = playState.ultimateCharge >= 1.0f) { viewModel.activateUltimate() }) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawCircle(Color.Gray.copy(alpha = 0.3f), size.width / 2f - 4f, style = Stroke(width = 4.dp.toPx()))
+                    drawArc(
+                        color = if (playState.ultimateCharge >= 1f) Color(0xFF00E5FF) else Color(0xFFBD00FF),
+                        startAngle = -90f, sweepAngle = playState.ultimateCharge * 360f,
+                        useCenter = false, style = Stroke(width = 4.dp.toPx())
                     )
-                } else {
-                    progress
+                }
+                Text(
+                    text = if (playState.ultimateCharge >= 1.0f) "⚡" else "${(playState.ultimateCharge*100).toInt()}%",
+                    color = if (playState.ultimateCharge >= 1.0f) Color(0xFF00E5FF) else Color.Gray,
+                    fontSize = if (playState.ultimateCharge >= 1.0f) 20.sp else 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // Shield button — icon always stays once ready; a number badge
+            // above it shows total stacked charges (2, 3, 4...) collected
+            // from bonus boxes. Only the count changes; the icon never
+            // disappears once you have at least one charge ready.
+            run {
+                val baseReady = playerShip.shieldCharge >= 1.0f
+                val totalCharges = playerShip.shieldStock + (if (baseReady) 1 else 0)
+                Box(contentAlignment = Alignment.Center,
+                    modifier = Modifier.testTag("shield_button").size(56.dp).clip(CircleShape)
+                        .background(Color(0xFF10111F).copy(alpha = 0.95f))
+                        .border(1.5.dp, Color.White.copy(alpha = 0.3f), CircleShape)
+                        .clickable(enabled = totalCharges >= 1) { viewModel.activateShield() }) {
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        drawCircle(Color.Gray.copy(alpha = 0.3f), size.width / 2f - 4f, style = Stroke(width = 4.dp.toPx()))
+                        drawArc(
+                            color = if (totalCharges >= 1) Color(0xFF00ADB5) else Color(0xFFFF2E63),
+                            startAngle = -90f, sweepAngle = playerShip.shieldCharge.coerceIn(0f,1f) * 360f,
+                            useCenter = false, style = Stroke(width = 4.dp.toPx())
+                        )
+                    }
+                    if (totalCharges >= 1) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                            if (totalCharges >= 2) {
+                                Text("$totalCharges", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Black)
+                            }
+                            Text("🛡️", fontSize = 16.sp)
+                        }
+                    } else {
+                        Text("${(playerShip.shieldCharge*100).toInt()}%", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                    }
                 }
             }
-            if (claimed) SoundSynth.playPowerup()
         }
     }
 }
 
-data class GameplayState(
-    val worldIndex: Int = 1,
-    val difficultyStars: Int = 1,
-    val score: Int = 0,
-    val comboMultiplier: Int = 1,
-    val comboTimerRemaining: Float = 0f,
-    val crystalsCollectedThisRun: Int = 0,
-    val activeBullets: List<Projectile> = emptyList(),
-    val activeEnemies: List<EnemyDrone> = emptyList(),
-    val activePowerUps: List<PowerUp> = emptyList(),
-    val activeParticles: List<Particle> = emptyList(),
-    val currentWave: Int = 1,
-    val totalWaves: Int = 5,
-    val isBossFight: Boolean = false,
-    val gameEnded: Boolean = false,
-    val levelComplete: Boolean = false,
-    val wrongMatchesCount: Int = 0,
-    val spawnTimer: Float = 0.6f,
-    val totalKilledThisRun: Int = 0,
-    val ultimateCharge: Float = 0f,
-    val shieldBoxesSpawnedCount: Int = 0,
-    // FIX: drives a dedicated, unscaled beam render in GameplayScreen
-    // (see ultimateBeamTimer usage there) — avoids the old approach of
-    // drawing the beam inside the non-uniform virtual->real scale
-    // transform, which could visually distort/squash a vertical bolt.
-    val ultimateBeamTimer: Float = 0f,
-    // Equipped cosmetics for this run — read by GameplayScreen to pick
-    // which trail/explosion visuals to draw.
-    val selectedTrail: String = "default",
-    val selectedExplosion: String = "default"
-)
+@Composable
+fun ColorDotItem(colorObj: EnergyColor, isSelected: Boolean, onClick: () -> Unit) {
+    val sizeVal by animateDpAsState(
+        targetValue = if (isSelected) 50.dp else 40.dp,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "wheel_scale"
+    )
+    Box(contentAlignment = Alignment.Center,
+        modifier = Modifier.size(sizeVal).clip(CircleShape).background(colorObj.composeColor)
+            .border(width = if (isSelected) 3.dp else 0.dp,
+                color = if (isSelected) Color.White else Color.Transparent, shape = CircleShape)
+            .clickable { onClick() }) {
+        if (isSelected) {
+            val inf = rememberInfiniteTransition(label = "border_shift")
+            val ratio by inf.animateFloat(0.5f, 1.0f,
+                infiniteRepeatable(tween(1000, easing = LinearEasing), RepeatMode.Reverse), label = "circle_ratio")
+            Canvas(Modifier.fillMaxSize()) {
+                drawCircle(Color.White.copy(alpha = ratio * 0.4f), size.width/2f + 6.dp.toPx()*ratio, style = Stroke(width = 1.5.dp.toPx()))
+            }
+        }
+    }
+}
