@@ -305,32 +305,58 @@ fun GameplayScreen(viewModel: GameViewModel) {
                         playState.activeParticles.forEach { part ->
                             when (part.type) {
                                 ParticleType.EXPLOSION -> {
-                                    // pixel_shrapnel cosmetic: square shards instead of circles
-                                    if (part.color == Color(0xFFFBBF24) && playState.selectedExplosion == "pixel_shrapnel") {
-                                        val s = part.size * 1.1f * (part.life/part.maxLife)
-                                        drawRect(part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
-                                            Offset(part.x - s/2f, part.y - s/2f), Size(s, s))
-                                    } else {
-                                        drawCircle(
-                                            part.color.copy(alpha = (part.life/part.maxLife).coerceIn(0f,1f)),
-                                            part.size*1.3f*(part.life/part.maxLife), Offset(part.x, part.y))
+                                    val a = (part.life/part.maxLife).coerceIn(0f, 1f)
+                                    when (part.text) {
+                                        "pixel_shrapnel" -> {
+                                            // Retro square shards, rotating
+                                            val s = part.size * 1.3f * a
+                                            rotate(part.x % 360f, Offset(part.x, part.y)) {
+                                                drawRect(part.color.copy(alpha = a),
+                                                    Offset(part.x - s/2f, part.y - s/2f), Size(s, s))
+                                            }
+                                        }
+                                        "cosmic_ring" -> {
+                                            // Expanding ring outline instead of a filled dot
+                                            drawCircle(part.color.copy(alpha = a), part.size * 1.6f * a,
+                                                Offset(part.x, part.y), style = Stroke(width = 4f))
+                                        }
+                                        "chroma_flicker" -> {
+                                            // Rainbow-colored burst (color already randomized per
+                                            // particle at spawn time) with extra glow
+                                            drawCircle(part.color.copy(alpha = a * 0.3f), part.size * 2f * a, Offset(part.x, part.y))
+                                            drawCircle(part.color.copy(alpha = a), part.size * 1.2f * a, Offset(part.x, part.y))
+                                        }
+                                        else -> drawCircle(part.color.copy(alpha = a), part.size * 1.3f * a, Offset(part.x, part.y))
                                     }
                                 }
                                 ParticleType.TRAIL -> {
-                                    // gold_dust cosmetic: tiny sparkle cross instead of a soft circle
-                                    if (part.text == "gold_dust") {
-                                        val a = (part.life/part.maxLife)
-                                        val s = part.size * a * 2.2f
-                                        drawLine(part.color.copy(alpha = a), Offset(part.x - s, part.y), Offset(part.x + s, part.y), 2f)
-                                        drawLine(part.color.copy(alpha = a), Offset(part.x, part.y - s), Offset(part.x, part.y + s), 2f)
-                                    } else if (part.text == "purple_warp") {
-                                        drawCircle(part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
-                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y),
-                                            style = Stroke(width = 2f))
-                                    } else {
-                                        drawCircle(
-                                            part.color.copy(alpha = (part.life/part.maxLife)*0.5f),
-                                            part.size*(part.life/part.maxLife)*0.8f, Offset(part.x, part.y))
+                                    val a = (part.life/part.maxLife)
+                                    when (part.text) {
+                                        "gold_dust" -> {
+                                            // Spinning sparkle cross
+                                            val s = part.size * a * 2.4f
+                                            drawLine(part.color.copy(alpha = a), Offset(part.x - s, part.y), Offset(part.x + s, part.y), 2.5f)
+                                            drawLine(part.color.copy(alpha = a), Offset(part.x, part.y - s), Offset(part.x, part.y + s), 2.5f)
+                                            drawCircle(part.color.copy(alpha = a * 0.6f), s * 0.4f, Offset(part.x, part.y))
+                                        }
+                                        "purple_warp" -> {
+                                            // Pulsing ring outlines, bigger than default
+                                            drawCircle(part.color.copy(alpha = a * 0.7f),
+                                                part.size * a * 1.6f, Offset(part.x, part.y),
+                                                style = Stroke(width = 3f))
+                                        }
+                                        "cyan_fume" -> {
+                                            // Soft billowing smoke puff — larger, softer-edged
+                                            drawCircle(part.color.copy(alpha = a * 0.35f), part.size * a * 2.0f, Offset(part.x, part.y))
+                                            drawCircle(part.color.copy(alpha = a * 0.6f), part.size * a * 1.1f, Offset(part.x, part.y))
+                                        }
+                                        "omega_clon" -> {
+                                            // Ghostly silhouette echo — faint wide square afterimage
+                                            val s = part.size * a * 1.8f
+                                            drawRect(part.color.copy(alpha = a * 0.45f),
+                                                Offset(part.x - s/2f, part.y - s/2f), Size(s, s))
+                                        }
+                                        else -> drawCircle(part.color.copy(alpha = a * 0.5f), part.size * a * 0.8f, Offset(part.x, part.y))
                                     }
                                 }
                                 ParticleType.SHOCKWAVE -> {
