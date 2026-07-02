@@ -5,7 +5,11 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [UserProgress::class], version = 1, exportSchema = false)
+// FIX: bumped version from 1 to 2 because UserProgress gained new columns
+// (unlockedTrailsStr, unlockedExplosionsStr, selectedTrail, selectedExplosion).
+// fallbackToDestructiveMigration() means Room just rebuilds the table cleanly
+// instead of crashing — saves data is lost but the app runs correctly.
+@Database(entities = [UserProgress::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun userProgressDao(): UserProgressDao
 
